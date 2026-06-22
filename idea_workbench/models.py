@@ -205,9 +205,10 @@ def call_json(
     validator,
     temperature: float = 0.2,
     max_attempts: int = 2,
+    timeout: float | None = None,
 ) -> Any:
     tier = get_model_tier(config, tier_name)
-    client = GPTCompatibleClient(tier)
+    client = GPTCompatibleClient(tier, timeout=timeout or float(config.get("llm_timeout_sec", 90)))
     trace_id = trace.new_id(stage)
     prompt_text = "\n\n".join(message.get("content", "") for message in messages)
     trace.write_artifact(trace_id, "prompt.md", prompt_text)

@@ -348,14 +348,89 @@ def load_idea_search_context(project: IdeaProject) -> dict[str, Any]:
             + ", ".join(missing)
             + ". Run `python3 -m idea_workbench run-deep <project>` first."
         )
-    return {
+    return compact_idea_search_context({
         "brief": read_json(required["brief"], {}),
         "claims": read_json(required["claims"], {}),
         "novelty_matrix": read_json(required["novelty_matrix"], {}),
         "reviewer_report": read_json(required["reviewer_report"], {}),
-        "papers": load_project_papers(project)[:80],
+        "papers": load_project_papers(project),
         "evidence_qa": read_json(project.evidence_dir / "evidence_status.json", {}),
+    })
+
+
+def compact_idea_search_context(context: dict[str, Any]) -> dict[str, Any]:
+    papers = [compact_paper(paper) for paper in context.get("papers", [])[:20]]
+    novelty = context.get("novelty_matrix", {})
+    compact_rows = []
+    for row in novelty.get("rows", [])[:10]:
+        compact_rows.append(
+            {
+                "claim_id": row.get("claim_id", ""),
+                "claim": row.get("claim", ""),
+                "risk": row.get("risk", ""),
+                "closest_papers": [
+                    {
+                        "title": paper.get("title", ""),
+                        "year": paper.get("year", ""),
+                        "overlap": truncate_text(paper.get("overlap", ""), 500),
+                        "difference": truncate_text(paper.get("difference", ""), 500),
+                        "evidence_strength": paper.get("evidence_strength", ""),
+                    }
+                    for paper in row.get("closest_papers", [])[:3]
+                ],
+                "missing_evidence": row.get("missing_evidence", [])[:5],
+                "positioning": truncate_text(row.get("positioning", ""), 700),
+            }
+        )
+    review = context.get("reviewer_report", {})
+    evidence = context.get("evidence_qa", {})
+    return {
+        "brief": context.get("brief", {}),
+        "claims": {
+            "claims": context.get("claims", {}).get("claims", [])[:8],
+            "risk_questions": context.get("claims", {}).get("risk_questions", [])[:8],
+        },
+        "novelty_matrix": {
+            "warning": novelty.get("warning", ""),
+            "overall_recommendation": novelty.get("overall_recommendation", ""),
+            "rows": compact_rows,
+        },
+        "reviewer_report": {
+            "summary": truncate_text(review.get("summary", ""), 1000),
+            "score": review.get("score", ""),
+            "recommendation": review.get("recommendation", ""),
+            "strongest_objections": review.get("strongest_objections", [])[:6],
+            "minimum_fixes": review.get("minimum_fixes", [])[:6],
+            "reviewer_likely_prior_work_attack": review.get("reviewer_likely_prior_work_attack", [])[:6],
+            "experiment_concerns": review.get("experiment_concerns", [])[:6],
+            "positioning_advice": truncate_text(review.get("positioning_advice", ""), 1000),
+        },
+        "papers": papers,
+        "evidence_qa": {
+            "status": evidence.get("status", ""),
+            "reason": evidence.get("reason", ""),
+            "selected_papers": [compact_paper(paper) for paper in evidence.get("selected_papers", [])[:8]],
+        },
     }
+
+
+def compact_paper(paper: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "title": paper.get("title", ""),
+        "year": paper.get("year", "") or str(paper.get("published_date", ""))[:4],
+        "source": paper.get("source", ""),
+        "url": paper.get("url", ""),
+        "pdf_url": paper.get("pdf_url", ""),
+        "local_pdf": paper.get("local_pdf", ""),
+        "abstract": truncate_text(paper.get("abstract", ""), 700),
+    }
+
+
+def truncate_text(value: Any, limit: int) -> str:
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3].rstrip() + "..."
 
 
 def extract_bottlenecks(config: dict[str, Any], trace: TraceLogger, context: dict[str, Any]) -> dict[str, Any]:
@@ -367,6 +442,7 @@ def extract_bottlenecks(config: dict[str, Any], trace: TraceLogger, context: dic
         stage="bottleneck_extractor",
         validator=normalize_bottlenecks,
         temperature=0.2,
+        timeout=180,
     )
 
 
@@ -382,6 +458,7 @@ def map_mechanism_transfers(config: dict[str, Any], trace: TraceLogger, context:
         stage="mechanism_transfer_mapper",
         validator=normalize_mechanism_transfers,
         temperature=0.35,
+        timeout=180,
     )
 
 
@@ -410,6 +487,7 @@ def generate_idea_branches(
         stage="idea_branch_generator",
         validator=normalize_idea_branches,
         temperature=0.55,
+        timeout=240,
     )
 
 
@@ -436,6 +514,7 @@ def screen_idea_branches(
         stage="branch_screener",
         validator=normalize_branch_screen,
         temperature=0.15,
+        timeout=180,
     )
 
 
@@ -462,6 +541,7 @@ def strengthen_ideas(
         stage="idea_strengthener",
         validator=normalize_strengthened_ideas,
         temperature=0.35,
+        timeout=180,
     )
 
 
@@ -496,6 +576,7 @@ def decide_ideas(
         stage="decision_chair",
         validator=normalize_idea_search_result,
         temperature=0.1,
+        timeout=240,
     )
 
 
