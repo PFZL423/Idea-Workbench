@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Local credentials
+secrets.local.yaml
+*/secrets.local.yaml
+
+# Generated idea projects and run artifacts
+/my-idea/
+/test-idea/
+/demo-idea/
+/scratch-idea*/
+*/papers/pdfs/
+*/papers/api_papers.json
+*/papers/papers_with_pdfs.json
+*/reports/
+*/state/
+*/logs/
+*/traces/
+*/evidence/
+
+# Local editor/system files
+.DS_Store
+*.swp

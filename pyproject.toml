@@ -1,0 +1,14 @@
+[project]
+name = "idea-workbench"
+version = "0.2.0"
+description = "Local LLM-orchestrated research idea workbench for literature-grounded idea refinement."
+requires-python = ">=3.10"
+readme = "README.md"
+dependencies = []
+
+[project.scripts]
+idea-workbench = "idea_workbench.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
