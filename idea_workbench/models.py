@@ -363,6 +363,135 @@ def mock_response(messages: list[dict[str, str]]) -> ModelResponse:
                 }
             ]
         }
+    elif "BottleneckAnalysis" in prompt or "bottleneck_extractor" in prompt:
+        data = {
+            "bottlenecks": [
+                {
+                    "id": "B1",
+                    "description": "Plain world models may predict contact dynamics without exposing controllable factors.",
+                    "why_it_matters": "This creates a publishable diagnostic boundary between prediction and control usefulness.",
+                    "current_limit": "Prediction loss can improve while manipulation success does not.",
+                    "failure_mode": "The model predicts plausible next states but selects actions that do not change the relevant object state.",
+                    "hidden_assumption": "Better predictive dynamics imply better controllability.",
+                    "evidence_signal": "A task where prediction error is similar but controllability intervention success diverges.",
+                }
+            ],
+            "hidden_assumptions": ["Prediction quality is a sufficient proxy for action usefulness."],
+            "opportunity_map": ["Turn controllability failure into a diagnostic benchmark and training signal."],
+        }
+    elif "MechanismTransferMap" in prompt or "mechanism_transfer_mapper" in prompt:
+        data = {
+            "transfers": [
+                {
+                    "id": "T1",
+                    "source_field": "causal representation learning",
+                    "source_mechanism": "intervention-based factor identification",
+                    "target_bottleneck": "B1",
+                    "mapping": {"intervention": "robot action", "causal factor": "controllable object state"},
+                    "why_transfer_is_nontrivial": "The mapping must handle continuous contact dynamics rather than static interventions.",
+                    "minimum_test": "Compare action intervention success against a plain predictive world model.",
+                    "main_risk": "The factorization may collapse to task-specific heuristics.",
+                }
+            ],
+            "do_not_force": ["Do not add diffusion unless it changes the controllability test."],
+        }
+    elif "IdeaBranches" in prompt or "idea_branch_generator" in prompt:
+        data = {
+            "branches": [
+                {
+                    "id": "I1",
+                    "name": "Controllability diagnostic for WAMs",
+                    "track": "diagnostic",
+                    "core_idea": "Build a diagnostic benchmark where predictive accuracy and controllable effect diverge.",
+                    "mechanism": "Intervention-style action probes over learned world action models.",
+                    "novelty_hypothesis": "The contribution is a diagnostic boundary, not another generic world model.",
+                    "minimum_experiment": "Rope or pushing task with matched prediction error and different action effect controllability.",
+                    "falsifiable_prediction": "A model can have low prediction error but fail controllability probes.",
+                    "closest_prior_work_risk": "Affordance and controllable representation papers may already frame this.",
+                    "feasibility_risk": "Probe design may be too task-specific.",
+                    "evidence_needed": ["Read affordance learning and controllable representation baselines."],
+                },
+                {
+                    "id": "I2",
+                    "name": "Action-factor bottleneck regularizer",
+                    "track": "method",
+                    "core_idea": "Train a world action model with an auxiliary controllable-factor bottleneck.",
+                    "mechanism": "Regularize latent dimensions by action intervention sensitivity.",
+                    "novelty_hypothesis": "The method links representation to downstream controllable effects.",
+                    "minimum_experiment": "Ablate the bottleneck on contact-rich manipulation tasks.",
+                    "falsifiable_prediction": "Removing the bottleneck reduces intervention success more than prediction accuracy.",
+                    "closest_prior_work_risk": "May overlap with object-centric or controllable representation learning.",
+                    "feasibility_risk": "The regularizer may not be stable.",
+                    "evidence_needed": ["Compare against object-centric world model papers."],
+                },
+            ]
+        }
+    elif "BranchScreen" in prompt or "branch_screener" in prompt:
+        data = {
+            "shortlist": [
+                {
+                    "branch_id": "I1",
+                    "decision": "keep",
+                    "score": 8,
+                    "rationale": "It is narrow, diagnostic, and can be tested cheaply.",
+                    "strengths": ["Clear failure mode", "Discriminative experiment"],
+                    "fatal_objections": [],
+                    "salvage_path": "Frame as benchmark plus analysis if method novelty is weak.",
+                    "evidence_needs": ["Closest affordance benchmark comparison"],
+                },
+                {
+                    "branch_id": "I2",
+                    "decision": "pivot",
+                    "score": 6,
+                    "rationale": "Promising but method overlap risk is higher.",
+                    "strengths": ["Action-sensitive mechanism"],
+                    "fatal_objections": ["Could be a renamed controllable representation loss."],
+                    "salvage_path": "Use as secondary method after the diagnostic contribution.",
+                    "evidence_needs": ["Object-centric controllability prior work"],
+                },
+            ],
+            "discarded": [],
+        }
+    elif "StrengthenedIdeas" in prompt or "idea_strengthener" in prompt:
+        data = {
+            "ideas": [
+                {
+                    "branch_id": "I1",
+                    "name": "Controllability Probe Suite for World Action Models",
+                    "research_question": "When does predictive world-model accuracy fail to imply action controllability?",
+                    "technical_move": "Create intervention probes over action-conditioned latent factors and compare against prediction-only metrics.",
+                    "novelty_lever": "A diagnostic separation between prediction and controllability.",
+                    "minimum_experiment": "Two contact-rich tasks where prediction error is matched but controllability probes differ.",
+                    "falsifiable_prediction": "Prediction-matched models will rank differently under controllability probes.",
+                    "main_risk": "The probe may duplicate affordance evaluation.",
+                    "evidence_needed": ["Affordance evaluation papers", "controllable representation papers"],
+                    "salvage_from_objections": "Position as a benchmark/diagnostic rather than a broad new architecture.",
+                }
+            ]
+        }
+    elif "IdeaSearchResult" in prompt or "decision_chair" in prompt:
+        data = {
+            "summary": "The diagnostic branch is the strongest because it is narrow, falsifiable, and less dependent on broad method novelty.",
+            "final_ideas": [
+                {
+                    "rank": 1,
+                    "branch_id": "I1",
+                    "name": "Controllability Probe Suite for World Action Models",
+                    "research_question": "When does predictive world-model accuracy fail to imply action controllability?",
+                    "technical_move": "Build intervention probes and evaluate prediction-matched WAMs on contact-rich tasks.",
+                    "why_now": "World-model robotics papers increasingly need diagnostics beyond prediction loss.",
+                    "novelty_lever": "Separates controllability from passive prediction in a measurable benchmark.",
+                    "closest_prior_work_attack": "Affordance learning and controllable representation benchmarks.",
+                    "minimum_experiment": "Rope or pushing task with prediction-matched models and controllability probe ranking.",
+                    "falsifiable_prediction": "Probe ranking will predict downstream action success better than prediction error.",
+                    "failure_conditions": ["Affordance benchmarks already measure the same quantity.", "Probe ranking does not predict action success."],
+                    "evidence_needed": ["Read closest affordance and controllable representation work."],
+                    "decision": "continue",
+                }
+            ],
+            "runner_up_ids": ["I2"],
+            "global_risks": ["The contribution may become benchmark-only unless the probe reveals a real failure mode."],
+        }
     else:
         data = {
             "objective": "Validate a controllability-aware world action model.",

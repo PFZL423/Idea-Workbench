@@ -17,6 +17,7 @@ from .llm_workflow import (
     render_doctor,
     run_deep,
     run_evidence,
+    run_idea_search,
     run_literature,
     run_review,
 )
@@ -119,6 +120,14 @@ def build_parser() -> argparse.ArgumentParser:
     review.add_argument("project")
     review.add_argument("--dry-run", action="store_true", help="write prompts without calling the LLM")
     review.set_defaults(func=cmd_review)
+
+    idea_search = sub.add_parser("idea-search", help="run multi-branch high-quality idea search after run-deep")
+    idea_search.add_argument("project")
+    idea_search.add_argument("--branches", type=int, default=20, help="number of idea branches to generate")
+    idea_search.add_argument("--shortlist", type=int, default=5, help="number of branches to keep for strengthening")
+    idea_search.add_argument("--final", type=int, default=3, help="number of final ideas to select")
+    idea_search.add_argument("--dry-run", action="store_true", help="write idea-search prompts without calling the LLM")
+    idea_search.set_defaults(func=cmd_idea_search)
 
     run_deep_parser = sub.add_parser("run-deep", help="run the LLM-first deep research idea workflow")
     run_deep_parser.add_argument("project")
@@ -251,6 +260,19 @@ def cmd_report(args: argparse.Namespace) -> int:
 def cmd_review(args: argparse.Namespace) -> int:
     project = assert_project(args.project)
     path = run_review(project, dry_run=args.dry_run)
+    print(f"wrote {path}")
+    return 0
+
+
+def cmd_idea_search(args: argparse.Namespace) -> int:
+    project = assert_project(args.project)
+    path = run_idea_search(
+        project,
+        branches=args.branches,
+        shortlist=args.shortlist,
+        final=args.final,
+        dry_run=args.dry_run,
+    )
     print(f"wrote {path}")
     return 0
 

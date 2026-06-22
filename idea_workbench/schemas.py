@@ -133,6 +133,117 @@ EXPERIMENT_SCHEMA = {
     ],
 }
 
+BOTTLENECK_SCHEMA = {
+    "bottlenecks": [
+        {
+            "id": "B1",
+            "description": "string",
+            "why_it_matters": "string",
+            "current_limit": "string",
+            "failure_mode": "string",
+            "hidden_assumption": "string",
+            "evidence_signal": "string",
+        }
+    ],
+    "hidden_assumptions": ["string"],
+    "opportunity_map": ["string"],
+}
+
+MECHANISM_TRANSFER_SCHEMA = {
+    "transfers": [
+        {
+            "id": "T1",
+            "source_field": "string",
+            "source_mechanism": "string",
+            "target_bottleneck": "string",
+            "mapping": {"source_variable": "target_variable"},
+            "why_transfer_is_nontrivial": "string",
+            "minimum_test": "string",
+            "main_risk": "string",
+        }
+    ],
+    "do_not_force": ["string"],
+}
+
+IDEA_BRANCH_SCHEMA = {
+    "branches": [
+        {
+            "id": "I1",
+            "name": "string",
+            "track": "conservative|diagnostic|method|failure_analysis|high_risk|mechanism_transfer",
+            "core_idea": "string",
+            "mechanism": "string",
+            "novelty_hypothesis": "string",
+            "minimum_experiment": "string",
+            "falsifiable_prediction": "string",
+            "closest_prior_work_risk": "string",
+            "feasibility_risk": "string",
+            "evidence_needed": ["string"],
+        }
+    ]
+}
+
+BRANCH_SCREEN_SCHEMA = {
+    "shortlist": [
+        {
+            "branch_id": "I1",
+            "decision": "keep|pivot|discard",
+            "score": "number 1-10",
+            "rationale": "string",
+            "strengths": ["string"],
+            "fatal_objections": ["string"],
+            "salvage_path": "string",
+            "evidence_needs": ["string"],
+        }
+    ],
+    "discarded": [
+        {
+            "branch_id": "I2",
+            "reason": "string",
+        }
+    ],
+}
+
+STRENGTHENED_IDEAS_SCHEMA = {
+    "ideas": [
+        {
+            "branch_id": "I1",
+            "name": "string",
+            "research_question": "string",
+            "technical_move": "string",
+            "novelty_lever": "string",
+            "minimum_experiment": "string",
+            "falsifiable_prediction": "string",
+            "main_risk": "string",
+            "evidence_needed": ["string"],
+            "salvage_from_objections": "string",
+        }
+    ]
+}
+
+IDEA_SEARCH_RESULT_SCHEMA = {
+    "summary": "string",
+    "final_ideas": [
+        {
+            "rank": "integer",
+            "branch_id": "I1",
+            "name": "string",
+            "research_question": "string",
+            "technical_move": "string",
+            "why_now": "string",
+            "novelty_lever": "string",
+            "closest_prior_work_attack": "string",
+            "minimum_experiment": "string",
+            "falsifiable_prediction": "string",
+            "failure_conditions": ["string"],
+            "evidence_needed": ["string"],
+            "decision": "continue|pivot|needs_evidence|discard",
+        }
+    ],
+    "runner_up_ids": ["I4"],
+    "global_risks": ["string"],
+}
+
 
 def ensure_dict(value: Any, schema_name: str) -> dict[str, Any]:
     if not isinstance(value, dict):
@@ -237,6 +348,133 @@ def normalize_experiment(data: Any) -> dict[str, Any]:
     require_keys(obj, ["objective"], "ExperimentPlan")
     for key in ("phases", "baselines", "metrics", "ablations", "failure_criteria", "results_to_claims"):
         obj.setdefault(key, [])
+    return obj
+
+
+def normalize_bottlenecks(data: Any) -> dict[str, Any]:
+    obj = ensure_dict(data, "BottleneckAnalysis")
+    bottlenecks = obj.get("bottlenecks")
+    if not isinstance(bottlenecks, list) or not bottlenecks:
+        raise SchemaError("BottleneckAnalysis.bottlenecks must be a non-empty list")
+    for index, item in enumerate(bottlenecks, start=1):
+        bottleneck = ensure_dict(item, "Bottleneck")
+        bottleneck.setdefault("id", f"B{index}")
+        bottleneck.setdefault("description", "")
+        bottleneck.setdefault("why_it_matters", "")
+        bottleneck.setdefault("current_limit", "")
+        bottleneck.setdefault("failure_mode", "")
+        bottleneck.setdefault("hidden_assumption", "")
+        bottleneck.setdefault("evidence_signal", "")
+    obj["hidden_assumptions"] = ensure_string_list(obj.get("hidden_assumptions", []))
+    obj["opportunity_map"] = ensure_string_list(obj.get("opportunity_map", []))
+    return obj
+
+
+def normalize_mechanism_transfers(data: Any) -> dict[str, Any]:
+    obj = ensure_dict(data, "MechanismTransferMap")
+    transfers = obj.get("transfers")
+    if not isinstance(transfers, list):
+        raise SchemaError("MechanismTransferMap.transfers must be a list")
+    for index, item in enumerate(transfers, start=1):
+        transfer = ensure_dict(item, "MechanismTransfer")
+        transfer.setdefault("id", f"T{index}")
+        transfer.setdefault("source_field", "")
+        transfer.setdefault("source_mechanism", "")
+        transfer.setdefault("target_bottleneck", "")
+        transfer.setdefault("mapping", {})
+        transfer.setdefault("why_transfer_is_nontrivial", "")
+        transfer.setdefault("minimum_test", "")
+        transfer.setdefault("main_risk", "")
+        if not isinstance(transfer.get("mapping"), dict):
+            transfer["mapping"] = {}
+    obj["do_not_force"] = ensure_string_list(obj.get("do_not_force", []))
+    return obj
+
+
+def normalize_idea_branches(data: Any) -> dict[str, Any]:
+    obj = ensure_dict(data, "IdeaBranches")
+    branches = obj.get("branches")
+    if not isinstance(branches, list) or not branches:
+        raise SchemaError("IdeaBranches.branches must be a non-empty list")
+    for index, item in enumerate(branches, start=1):
+        branch = ensure_dict(item, "IdeaBranch")
+        branch.setdefault("id", f"I{index}")
+        branch.setdefault("name", "")
+        branch.setdefault("track", "method")
+        branch.setdefault("core_idea", "")
+        branch.setdefault("mechanism", "")
+        branch.setdefault("novelty_hypothesis", "")
+        branch.setdefault("minimum_experiment", "")
+        branch.setdefault("falsifiable_prediction", "")
+        branch.setdefault("closest_prior_work_risk", "")
+        branch.setdefault("feasibility_risk", "")
+        branch["evidence_needed"] = ensure_string_list(branch.get("evidence_needed", []))
+    return obj
+
+
+def normalize_branch_screen(data: Any) -> dict[str, Any]:
+    obj = ensure_dict(data, "BranchScreen")
+    shortlist = obj.get("shortlist")
+    if not isinstance(shortlist, list):
+        raise SchemaError("BranchScreen.shortlist must be a list")
+    for item in shortlist:
+        screen = ensure_dict(item, "ShortlistItem")
+        require_keys(screen, ["branch_id"], "ShortlistItem")
+        screen.setdefault("decision", "keep")
+        screen.setdefault("score", 0)
+        screen.setdefault("rationale", "")
+        screen["strengths"] = ensure_string_list(screen.get("strengths", []))
+        screen["fatal_objections"] = ensure_string_list(screen.get("fatal_objections", []))
+        screen.setdefault("salvage_path", "")
+        screen["evidence_needs"] = ensure_string_list(screen.get("evidence_needs", []))
+    discarded = obj.get("discarded", [])
+    obj["discarded"] = discarded if isinstance(discarded, list) else []
+    return obj
+
+
+def normalize_strengthened_ideas(data: Any) -> dict[str, Any]:
+    obj = ensure_dict(data, "StrengthenedIdeas")
+    ideas = obj.get("ideas")
+    if not isinstance(ideas, list) or not ideas:
+        raise SchemaError("StrengthenedIdeas.ideas must be a non-empty list")
+    for item in ideas:
+        idea = ensure_dict(item, "StrengthenedIdea")
+        require_keys(idea, ["name"], "StrengthenedIdea")
+        idea.setdefault("branch_id", "")
+        idea.setdefault("research_question", "")
+        idea.setdefault("technical_move", "")
+        idea.setdefault("novelty_lever", "")
+        idea.setdefault("minimum_experiment", "")
+        idea.setdefault("falsifiable_prediction", "")
+        idea.setdefault("main_risk", "")
+        idea["evidence_needed"] = ensure_string_list(idea.get("evidence_needed", []))
+        idea.setdefault("salvage_from_objections", "")
+    return obj
+
+
+def normalize_idea_search_result(data: Any) -> dict[str, Any]:
+    obj = ensure_dict(data, "IdeaSearchResult")
+    ideas = obj.get("final_ideas")
+    if not isinstance(ideas, list) or not ideas:
+        raise SchemaError("IdeaSearchResult.final_ideas must be a non-empty list")
+    for index, item in enumerate(ideas, start=1):
+        idea = ensure_dict(item, "FinalIdea")
+        idea.setdefault("rank", index)
+        idea.setdefault("branch_id", "")
+        idea.setdefault("name", "")
+        idea.setdefault("research_question", "")
+        idea.setdefault("technical_move", "")
+        idea.setdefault("why_now", "")
+        idea.setdefault("novelty_lever", "")
+        idea.setdefault("closest_prior_work_attack", "")
+        idea.setdefault("minimum_experiment", "")
+        idea.setdefault("falsifiable_prediction", "")
+        idea["failure_conditions"] = ensure_string_list(idea.get("failure_conditions", []))
+        idea["evidence_needed"] = ensure_string_list(idea.get("evidence_needed", []))
+        idea.setdefault("decision", "needs_evidence")
+    obj.setdefault("summary", "")
+    obj["runner_up_ids"] = ensure_string_list(obj.get("runner_up_ids", []))
+    obj["global_risks"] = ensure_string_list(obj.get("global_risks", []))
     return obj
 
 

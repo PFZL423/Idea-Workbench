@@ -167,6 +167,41 @@ my-idea/reports/reviewer_report.md
 my-idea/reports/evidence_qa.md
 ```
 
+### 8. 可选：运行高质量 idea search
+
+如果你希望工具不只是“打磨原想法”，而是主动生成多个高潜力分支并筛选，运行：
+
+```bash
+python3 -m idea_workbench idea-search my-idea
+```
+
+默认会做：
+
+```text
+提取瓶颈 → 机制迁移 → 生成约20个分支 → 筛到5个 → 最终选3个
+```
+
+输出：
+
+```text
+my-idea/reports/idea_search.md
+my-idea/state/idea_search.json
+```
+
+这个命令需要先跑过 `run-deep`，因为它会复用已有的 brief、claims、文献、evidence、novelty matrix 和 reviewer report。
+
+可调预算：
+
+```bash
+python3 -m idea_workbench idea-search my-idea --branches 20 --shortlist 5 --final 3
+```
+
+只看 prompt、不调用 LLM：
+
+```bash
+python3 -m idea_workbench idea-search my-idea --dry-run
+```
+
 ## 可选：下载检索结果里的 PDF
 
 `run-deep` 会先检索论文，并写入：
@@ -262,6 +297,7 @@ python3 -m idea_workbench run-deep my-idea --offline-search
 python3 -m idea_workbench doctor my-idea
 python3 -m idea_workbench run-deep my-idea --dry-run
 python3 -m idea_workbench run-deep my-idea
+python3 -m idea_workbench idea-search my-idea
 python3 -m idea_workbench pdfs my-idea --top 20
 python3 -m idea_workbench evidence my-idea
 ```

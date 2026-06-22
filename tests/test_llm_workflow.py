@@ -27,6 +27,20 @@ class LlmWorkflowTest(unittest.TestCase):
             check=True,
         )
 
+    def run_cli_no_check(self, *args: str, env_extra: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+        env = dict(os.environ)
+        env["PYTHONPATH"] = str(REPO_ROOT)
+        if env_extra:
+            env.update(env_extra)
+        return subprocess.run(
+            [sys.executable, "-m", "idea_workbench", *args],
+            cwd=REPO_ROOT,
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
     def test_doctor_reports_missing_gpt_env(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp) / "idea"
@@ -145,6 +159,55 @@ model_tiers:
             evidence_report = (project / "reports" / "evidence_qa.md").read_text(encoding="utf-8")
             self.assertIn("Manual Related Work on Tactile World Models", evidence_report)
             self.assertIn(str(pdf_dir / "manual.pdf"), evidence_report)
+
+    def test_idea_search_mock_end_to_end(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "idea"
+            self.run_cli("init", str(project), "--seed-text", "world action model for robot manipulation")
+            env = {"GPT_API_BASE_URL": "mock://idea-workbench", "GPT_API_KEY": "mock-key"}
+            self.run_cli("run-deep", str(project), "--offline-search", env_extra=env)
+            self.run_cli("idea-search", str(project), "--branches", "8", "--shortlist", "3", "--final", "2", env_extra=env)
+
+            report = (project / "reports" / "idea_search.md").read_text(encoding="utf-8")
+            state = json.loads((project / "state" / "idea_search.json").read_text(encoding="utf-8"))
+            self.assertIn("Idea Search Report", report)
+            self.assertIn("Controllability Probe Suite", report)
+            self.assertEqual(state["parameters"]["branches"], 8)
+            self.assertTrue(state["final"]["final_ideas"])
+
+    def test_idea_search_dry_run_writes_prompts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "idea"
+            self.run_cli("init", str(project), "--seed-text", "world action model for robot manipulation")
+            env = {"GPT_API_BASE_URL": "mock://idea-workbench", "GPT_API_KEY": "mock-key"}
+            self.run_cli("run-deep", str(project), "--offline-search", env_extra=env)
+            self.run_cli(
+                "idea-search",
+                str(project),
+                "--branches",
+                "6",
+                "--shortlist",
+                "2",
+                "--final",
+                "1",
+                "--dry-run",
+                env_extra={"GPT_API_BASE_URL": "", "GPT_API_KEY": ""},
+            )
+
+            self.assertTrue((project / "reports" / "idea_search_dry_run.md").exists())
+            self.assertTrue((project / "traces" / "idea_search_dry_run_prompts.json").exists())
+
+    def test_idea_search_requires_run_deep_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "idea"
+            self.run_cli("init", str(project), "--seed-text", "world action model")
+            result = self.run_cli_no_check(
+                "idea-search",
+                str(project),
+                env_extra={"GPT_API_BASE_URL": "mock://idea-workbench", "GPT_API_KEY": "mock-key"},
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("requires run-deep artifacts", result.stderr)
 
 
 if __name__ == "__main__":
