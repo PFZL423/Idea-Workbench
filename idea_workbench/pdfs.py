@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .project import detail_report_path
 from .render import md_table, timestamp
 
 
@@ -86,7 +87,8 @@ def run_pdf_fetch(
 
     index_path = project.papers_dir / "papers_with_pdfs.json"
     index_path.write_text(json.dumps(processed, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    report_path = project.reports_dir / "pdf_downloads.md"
+    report_path = detail_report_path(project, "pdf_downloads.md")
+    report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(render_pdf_report(processed, top=top, dry_run=dry_run), encoding="utf-8")
     return PdfFetchResult(papers=processed, report_path=report_path, index_path=index_path)
 

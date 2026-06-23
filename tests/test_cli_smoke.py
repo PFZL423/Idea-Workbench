@@ -32,12 +32,12 @@ class CliSmokeTest(unittest.TestCase):
             self.run_cli("run-all", str(project), "--offline")
 
             expected = [
-                project / "reports" / "decomposition.md",
+                project / "reports" / "details" / "decomposition.md",
                 project / "queries.yaml",
-                project / "reports" / "search_log.md",
-                project / "reports" / "novelty_matrix.md",
-                project / "reports" / "refined_ideas.md",
-                project / "reports" / "experiment_plan.md",
+                project / "reports" / "details" / "search_log.md",
+                project / "reports" / "details" / "novelty_matrix.md",
+                project / "reports" / "details" / "refined_ideas.md",
+                project / "reports" / "details" / "experiment_plan.md",
                 project / "reports" / "final_report_cn.md",
             ]
             for path in expected:

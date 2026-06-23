@@ -8,7 +8,7 @@ from .evidence import detect_evidence_backend, run_evidence_qa
 from .heuristics import build_experiment_plan, build_novelty_matrix, decompose_seed, refine_ideas
 from .literature_store import build_or_load_literature_store, retrieve_novelty_claim_context, retrieve_stage_context
 from .models import ModelConfigError, call_json, doctor as model_doctor, get_model_tier
-from .project import IdeaProject, load_config, read_json, read_text, write_json, write_text
+from .project import IdeaProject, detail_report_path, load_config, read_detail_report, read_json, read_text, write_json, write_text
 from .render import (
     md_table,
     render_decomposition,
@@ -51,6 +51,15 @@ from .tracing import TraceLogger, text_hash
 
 
 PROMPT_DIR = Path(__file__).resolve().parents[1] / "prompts"
+
+
+def progress(message: str) -> None:
+    print(f"[idea-workbench] {message}", flush=True)
+
+
+def log_progress(progress_fn, message: str) -> None:
+    if progress_fn:
+        progress_fn(message)
 
 
 def doctor_report(project: IdeaProject | None = None) -> dict[str, Any]:
@@ -134,6 +143,7 @@ def run_deep(
         return write_dry_run(project, config, seed_text)
 
     assert_llm_ready(config)
+    progress("run-deep: start")
 
     stage_dir = project.state_dir / "run_deep_stages"
     stage_dir.mkdir(parents=True, exist_ok=True)
@@ -145,6 +155,8 @@ def run_deep(
         {"stage_version": 1, "seed": seed_text},
         lambda: extract_brief(config, trace, seed_text),
         accept=lambda value: isinstance(value, dict) and bool(value.get("topic") or value.get("problem_statement")),
+        progress=progress,
+        label="brief [standard]",
     )
     claims_doc = cached_json_stage(
         stage_dir,
@@ -153,6 +165,8 @@ def run_deep(
         {"stage_version": 1, "seed": seed_text, "brief": brief},
         lambda: decompose_claims(config, trace, seed_text, brief),
         accept=lambda value: isinstance(value, dict) and bool(value.get("claims")),
+        progress=progress,
+        label="claims [standard]",
     )
     queries = cached_json_stage(
         stage_dir,
@@ -161,15 +175,17 @@ def run_deep(
         {"stage_version": 1, "seed": seed_text, "brief": brief, "claims": claims_doc},
         lambda: plan_queries(config, trace, seed_text, brief, claims_doc),
         accept=lambda value: isinstance(value, list) and bool(value),
+        progress=progress,
+        label="query planning [cheap]",
     )
 
     write_json(project.state_dir / "brief.json", brief)
     write_json(project.state_dir / "claims.json", claims_doc)
-    write_text(project.reports_dir / "research_brief.md", render_brief(brief))
+    write_text(detail_report_path(project, "research_brief.md"), render_brief(brief))
 
     decomposition = claims_to_decomposition(brief, claims_doc)
     write_json(project.state_dir / "decomposition.json", decomposition)
-    write_text(project.reports_dir / "decomposition.md", render_decomposition(decomposition))
+    write_text(detail_report_path(project, "decomposition.md"), render_decomposition(decomposition))
     write_text(project.queries_path, render_queries(queries))
     write_json(project.state_dir / "queries.json", queries)
 
@@ -188,15 +204,19 @@ def run_deep(
         },
         lambda: dict_from_search_result(run_search(queries, sources=search_sources, limit=max_results, offline=offline_search)),
         accept=lambda value: isinstance(value, dict) and isinstance(value.get("papers"), list),
+        progress=progress,
+        label="paper search",
     )
     papers = search_result.get("papers", [])
     errors = search_result.get("errors", [])
     write_json(project.papers_dir / "api_papers.json", papers)
     papers = merge_paper_lists(papers, load_project_papers(project))
     write_json(project.logs_dir / "search_errors.json", errors)
-    write_text(project.reports_dir / "search_log.md", render_search_log(queries, papers, errors))
+    write_text(detail_report_path(project, "search_log.md"), render_search_log(queries, papers, errors))
+    progress(f"paper search: {len(papers)} papers, {len(errors)} notes/errors")
 
     evidence = run_evidence_qa(project, config, claims_doc, papers)
+    progress(f"evidence QA: {evidence.get('status', '')}")
 
     matrix = cached_json_stage(
         stage_dir,
@@ -210,11 +230,13 @@ def run_deep(
             "evidence": evidence_for_cache(evidence),
             "batch_size": max(1, int(config.get("novelty_matrix_claim_batch_size", 1))),
         },
-        lambda: build_llm_matrix(config, trace, project, brief, claims_doc, papers, evidence),
+        lambda: build_llm_matrix(config, trace, project, brief, claims_doc, papers, evidence, progress=progress),
         accept=lambda value: isinstance(value, dict) and bool(value.get("rows")),
+        progress=progress,
+        label="novelty matrix [strong]",
     )
     write_json(project.state_dir / "novelty_matrix.json", matrix)
-    write_text(project.reports_dir / "novelty_matrix.md", render_matrix(matrix))
+    write_text(detail_report_path(project, "novelty_matrix.md"), render_matrix(matrix))
 
     review = cached_json_stage(
         stage_dir,
@@ -223,9 +245,11 @@ def run_deep(
         {"stage_version": 2, "brief": brief, "claims": claims_doc, "novelty_matrix": matrix},
         lambda: review_project(config, trace, brief, claims_doc, matrix),
         accept=lambda value: isinstance(value, dict) and bool(value.get("summary")),
+        progress=progress,
+        label="adversarial review [frontier]",
     )
     write_json(project.state_dir / "reviewer_report.json", review)
-    write_text(project.reports_dir / "reviewer_report.md", render_review(review))
+    write_text(detail_report_path(project, "reviewer_report.md"), render_review(review))
 
     ideas = cached_json_stage(
         stage_dir,
@@ -234,9 +258,11 @@ def run_deep(
         {"stage_version": 2, "brief": brief, "novelty_matrix": matrix, "review": review},
         lambda: refine_with_llm(config, trace, brief, matrix, review),
         accept=lambda value: isinstance(value, list) and bool(value),
+        progress=progress,
+        label="idea refinement [strong]",
     )
     write_json(project.state_dir / "refined_ideas.json", ideas)
-    write_text(project.reports_dir / "refined_ideas.md", render_llm_ideas(ideas))
+    write_text(detail_report_path(project, "refined_ideas.md"), render_llm_ideas(ideas))
 
     experiment = cached_json_stage(
         stage_dir,
@@ -245,24 +271,27 @@ def run_deep(
         {"stage_version": 2, "brief": brief, "novelty_matrix": matrix, "review": review, "ideas": ideas},
         lambda: plan_experiment_with_llm(config, trace, brief, matrix, review, ideas),
         accept=lambda value: isinstance(value, dict) and bool(value.get("objective")),
+        progress=progress,
+        label="experiment plan [standard]",
     )
     write_json(project.state_dir / "experiment_plan.json", experiment)
-    write_text(project.reports_dir / "experiment_plan.md", render_llm_experiment(experiment))
+    write_text(detail_report_path(project, "experiment_plan.md"), render_llm_experiment(experiment))
 
     final_path = project.reports_dir / "final_report_cn.md"
     write_text(
         final_path,
         render_final_report(
-            read_text(project.reports_dir / "decomposition.md"),
-            read_text(project.reports_dir / "novelty_matrix.md"),
-            read_text(project.reports_dir / "refined_ideas.md"),
-            read_text(project.reports_dir / "experiment_plan.md"),
+            read_detail_report(project, "decomposition.md"),
+            read_detail_report(project, "novelty_matrix.md"),
+            read_detail_report(project, "refined_ideas.md"),
+            read_detail_report(project, "experiment_plan.md"),
         )
         + "\n---\n\n"
-        + read_text(project.reports_dir / "evidence_qa.md")
+        + read_detail_report(project, "evidence_qa.md")
         + "\n---\n\n"
-        + read_text(project.reports_dir / "reviewer_report.md"),
+        + read_detail_report(project, "reviewer_report.md"),
     )
+    progress(f"run-deep: wrote {final_path}")
     return final_path
 
 
@@ -288,7 +317,7 @@ def run_literature(project: IdeaProject, *, offline: bool, limit: int | None, so
     )
     write_json(project.papers_dir / "api_papers.json", papers)
     write_json(project.logs_dir / "search_errors.json", errors)
-    path = project.reports_dir / "search_log.md"
+    path = detail_report_path(project, "search_log.md")
     write_text(path, render_search_log(queries, papers, errors))
     return path
 
@@ -301,7 +330,7 @@ def run_evidence(project: IdeaProject, *, mock: bool | None = None) -> Path:
         claims = {"claims": decomposition.get("claims", []), "risk_questions": decomposition.get("risk_questions", [])}
     papers = load_project_papers(project)
     run_evidence_qa(project, config, claims, papers, mock=mock)
-    return project.reports_dir / "evidence_qa.md"
+    return detail_report_path(project, "evidence_qa.md")
 
 
 def load_project_papers(project: IdeaProject) -> list[dict[str, Any]]:
@@ -360,7 +389,7 @@ def run_review(project: IdeaProject, *, dry_run: bool = False) -> Path:
         raise ModelConfigError("review requires brief, claims, and novelty_matrix; run run-deep first")
     review = review_project(config, trace, brief, claims, matrix)
     write_json(project.state_dir / "reviewer_report.json", review)
-    path = project.reports_dir / "reviewer_report.md"
+    path = detail_report_path(project, "reviewer_report.md")
     write_text(path, render_review(review))
     return path
 
@@ -384,6 +413,7 @@ def run_idea_search(
     }
     if not dry_run:
         assert_llm_ready(config, tiers=("strong", "frontier"))
+        progress("idea-search: start")
 
     papers = load_project_papers(project)
     literature_store = build_or_load_literature_store(
@@ -395,6 +425,7 @@ def run_idea_search(
         reviewer_report=base_context["reviewer_report"],
         evidence_qa=base_context["evidence_qa"],
         refresh=refresh_evidence_store,
+        progress=progress if not dry_run else None,
     )
 
     if dry_run:
@@ -408,7 +439,10 @@ def run_idea_search(
     bottleneck_context = retrieve_stage_context(store=literature_store, stage="bottleneck_extractor", base_context=base_context)
     bottlenecks = cached_stage(
         stage_dir / "bottlenecks.json",
+        {"stage_version": 2, "context": bottleneck_context},
         lambda: extract_bottlenecks(config, trace, bottleneck_context),
+        progress=progress,
+        label="bottlenecks [strong]",
     )
 
     transfer_context = retrieve_stage_context(
@@ -419,7 +453,10 @@ def run_idea_search(
     )
     transfers = cached_stage(
         stage_dir / "mechanism_transfers.json",
+        {"stage_version": 2, "context": transfer_context, "bottlenecks": summarize_bottlenecks(bottlenecks)},
         lambda: map_mechanism_transfers(config, trace, transfer_context, bottlenecks),
+        progress=progress,
+        label="mechanism transfer [strong]",
     )
 
     branches_doc = generate_idea_branches_batched(
@@ -431,6 +468,7 @@ def run_idea_search(
         bottlenecks,
         transfers,
         params["branches"],
+        progress=progress,
     )
 
     screen_context = retrieve_stage_context(
@@ -442,7 +480,15 @@ def run_idea_search(
     )
     screen = cached_stage(
         stage_dir / f"screen_{params['shortlist']}.json",
+        {
+            "stage_version": 2,
+            "context": screen_context,
+            "branches": summarize_branches(branches_doc),
+            "shortlist": params["shortlist"],
+        },
         lambda: screen_idea_branches(config, trace, screen_context, branches_doc, params["shortlist"]),
+        progress=progress,
+        label=f"branch screen [strong, top {params['shortlist']}]",
     )
 
     strengthener_context = retrieve_stage_context(
@@ -454,7 +500,15 @@ def run_idea_search(
     )
     strengthened = cached_stage(
         stage_dir / "strengthened_ideas.json",
+        {
+            "stage_version": 2,
+            "context": strengthener_context,
+            "branches": summarize_branches(branches_doc),
+            "screen": summarize_screen(screen),
+        },
         lambda: strengthen_ideas(config, trace, strengthener_context, branches_doc, screen),
+        progress=progress,
+        label="idea strengthening [strong]",
     )
 
     decision_context = retrieve_stage_context(
@@ -471,7 +525,18 @@ def run_idea_search(
     )
     final_result = cached_stage(
         stage_dir / f"decision_{params['final']}.json",
+        {
+            "stage_version": 2,
+            "context": decision_context,
+            "bottlenecks": summarize_bottlenecks(bottlenecks),
+            "transfers": summarize_transfers(transfers),
+            "screen": summarize_screen(screen),
+            "strengthened": summarize_strengthened(strengthened),
+            "final": params["final"],
+        },
         lambda: decide_ideas(config, trace, decision_context, bottlenecks, transfers, branches_doc, screen, strengthened, params["final"]),
+        progress=progress,
+        label=f"final decision [frontier, top {params['final']}]",
     )
 
     result = {
@@ -491,6 +556,7 @@ def run_idea_search(
     write_json(project.state_dir / "idea_search.json", result)
     path = project.reports_dir / "idea_search.md"
     write_text(path, render_idea_search(result))
+    progress(f"idea-search: wrote {path}")
     return path
 
 
@@ -525,15 +591,20 @@ def cached_json_stage(
     producer,
     *,
     accept=None,
+    progress=None,
+    label: str | None = None,
 ) -> Any:
     input_hash = json_input_hash(input_data)
     meta_path = stage_dir / f"{name}.meta.json"
+    display = label or name
     if output_path.exists() and meta_path.exists():
         cached = read_json(output_path, None)
         meta = read_json(meta_path, {})
         if meta.get("input_hash") == input_hash and (accept(cached) if accept else cached not in (None, {}, [])):
+            log_progress(progress, f"{display}: cache hit")
             return cached
 
+    log_progress(progress, f"{display}: running")
     result = producer()
     write_json(output_path, result)
     write_json(meta_path, {"input_hash": input_hash})
@@ -579,18 +650,41 @@ def evidence_for_cache(evidence: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def cached_stage(path: Path, producer) -> dict[str, Any]:
-    if path.exists():
+def cached_stage(
+    path: Path,
+    input_data: Any,
+    producer,
+    *,
+    accept=None,
+    progress=None,
+    label: str | None = None,
+) -> dict[str, Any]:
+    input_hash = json_input_hash(input_data)
+    meta_path = cache_meta_path(path)
+    display = label or path.stem
+    if path.exists() and meta_path.exists():
         cached = read_json(path, {})
-        if isinstance(cached, dict) and cached:
+        meta = read_json(meta_path, {})
+        accepted = accept(cached) if accept else isinstance(cached, dict) and bool(cached)
+        if meta.get("input_hash") == input_hash and accepted:
+            log_progress(progress, f"{display}: cache hit")
             return cached
+    log_progress(progress, f"{display}: running")
     result = producer()
     write_json(path, result)
+    write_json(meta_path, {"input_hash": input_hash})
     return result
+
+
+def cache_meta_path(path: Path) -> Path:
+    return path.with_name(f"{path.stem}.meta.json")
 
 
 def clear_stage_cache(stage_dir: Path) -> None:
     for path in stage_dir.glob("*.json"):
+        if path.is_file():
+            path.unlink()
+    for path in stage_dir.glob("*.meta.json"):
         if path.is_file():
             path.unlink()
 
@@ -604,13 +698,32 @@ def generate_idea_branches_batched(
     bottlenecks: dict[str, Any],
     transfers: dict[str, Any],
     branch_count: int,
+    progress=None,
 ) -> dict[str, Any]:
     merged_path = stage_dir / f"branches_{branch_count}.json"
-    if merged_path.exists():
+    merged_input = {
+        "stage_version": 2,
+        "branch_count": branch_count,
+        "literature_store_signature": literature_store.get("input_signature", {}),
+        "base_context": {
+            "brief": base_context.get("brief", {}),
+            "claims": base_context.get("claims", {}),
+            "novelty_matrix": base_context.get("novelty_matrix", {}),
+            "reviewer_report": base_context.get("reviewer_report", {}),
+        },
+        "bottlenecks": summarize_bottlenecks(bottlenecks),
+        "transfers": summarize_transfers(transfers),
+    }
+    merged_hash = json_input_hash(merged_input)
+    merged_meta = cache_meta_path(merged_path)
+    if merged_path.exists() and merged_meta.exists():
         cached = read_json(merged_path, {})
-        if isinstance(cached, dict) and cached.get("branches"):
+        meta = read_json(merged_meta, {})
+        if meta.get("input_hash") == merged_hash and isinstance(cached, dict) and cached.get("branches"):
+            log_progress(progress, f"idea branches [strong, {branch_count}]: cache hit")
             return cached
 
+    log_progress(progress, f"idea branches [strong, {branch_count}]: running")
     batch_size = 5
     batches: list[dict[str, Any]] = []
     generated_so_far: list[dict[str, Any]] = []
@@ -646,6 +759,14 @@ def generate_idea_branches_batched(
         )
         batch_doc = cached_stage(
             batch_path,
+            {
+                "stage_version": 2,
+                "target": target,
+                "branch_count": branch_count,
+                "context": branch_context,
+                "bottlenecks": summarize_bottlenecks(bottlenecks),
+                "transfers": summarize_transfers(transfers),
+            },
             lambda target=target, branch_context=branch_context: generate_idea_branches(
                 config,
                 trace,
@@ -654,6 +775,8 @@ def generate_idea_branches_batched(
                 transfers,
                 target,
             ),
+            progress=progress,
+            label=f"branch batch {batch_index} [strong, {target}]",
         )
         batches.append(batch_doc)
         generated_so_far = merge_branch_batches(batches, branch_count)["branches"]
@@ -667,6 +790,7 @@ def generate_idea_branches_batched(
 
     merged = merge_branch_batches(batches, branch_count)
     write_json(merged_path, merged)
+    write_json(merged_meta, {"input_hash": merged_hash})
     return merged
 
 
@@ -1045,6 +1169,7 @@ def build_llm_matrix(
     claims: dict[str, Any],
     papers: list[dict[str, Any]],
     evidence: dict[str, Any] | None = None,
+    progress=None,
 ) -> dict[str, Any]:
     if not papers:
         fallback = build_novelty_matrix(claims_to_decomposition(brief, claims), [], config)
@@ -1061,6 +1186,7 @@ def build_llm_matrix(
         novelty_matrix={},
         reviewer_report={},
         evidence_qa=evidence or {},
+        progress=progress,
     )
     claim_items = [item for item in claims.get("claims", []) if isinstance(item, dict)]
     if not claim_items:
@@ -1093,6 +1219,8 @@ def build_llm_matrix(
                 evidence or {},
             ),
             accept=lambda value: isinstance(value, dict) and bool(value.get("rows")),
+            progress=progress,
+            label=f"novelty matrix batch {batch_index} [strong]",
         )
         batches.append(batch)
 
@@ -1404,7 +1532,7 @@ def write_dry_run(project: IdeaProject, config: dict[str, Any], seed_text: str) 
         "experiment_planner": prompt_messages("experiment_planner", {"schema": EXPERIMENT_SCHEMA}),
     }
     trace.write_artifact("dry_run_prompts", "json", payloads)
-    path = project.reports_dir / "run_deep_dry_run.md"
+    path = detail_report_path(project, "run_deep_dry_run.md")
     write_text(
         path,
         "# run-deep dry run\n\n"
@@ -1528,7 +1656,7 @@ def write_idea_search_dry_run(
         ),
     }
     trace.write_artifact("idea_search_dry_run_prompts", "json", payloads)
-    path = project.reports_dir / "idea_search_dry_run.md"
+    path = detail_report_path(project, "idea_search_dry_run.md")
     write_text(
         path,
         "# idea-search dry run\n\n"

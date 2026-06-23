@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import ModelConfigError, get_model_tier
+from .project import detail_report_path
 from .render import md_table
 
 
@@ -282,7 +283,9 @@ def write_evidence_outputs(project: Any, result: dict[str, Any]) -> None:
         json.dumps(result, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
-    (project.reports_dir / "evidence_qa.md").write_text(render_evidence_report(result), encoding="utf-8")
+    report_path = detail_report_path(project, "evidence_qa.md")
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(render_evidence_report(result), encoding="utf-8")
 
 
 def render_evidence_report(result: dict[str, Any]) -> str:

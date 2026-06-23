@@ -206,6 +206,17 @@ def write_json(path: Path, data: Any) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def detail_report_path(project: IdeaProject, filename: str) -> Path:
+    return project.reports_dir / "details" / filename
+
+
+def read_detail_report(project: IdeaProject, filename: str) -> str:
+    detail = detail_report_path(project, filename)
+    if detail.exists():
+        return read_text(detail)
+    return read_text(project.reports_dir / filename)
+
+
 def load_config(project: IdeaProject) -> dict[str, Any]:
     parsed = parse_simple_yaml(read_text(project.config_path))
     secrets = parse_simple_yaml(read_text(project.secrets_path))

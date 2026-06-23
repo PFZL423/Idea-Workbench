@@ -64,7 +64,7 @@ class PdfFetchTest(unittest.TestCase):
             self.assertEqual(index[0]["pdf_status"], "resolved")
             self.assertEqual(index[0]["pdf_url"], "https://arxiv.org/pdf/2506.14186v2.pdf")
             self.assertEqual(index[1]["pdf_status"], "unresolved")
-            report = (project / "reports" / "pdf_downloads.md").read_text(encoding="utf-8")
+            report = (project / "reports" / "details" / "pdf_downloads.md").read_text(encoding="utf-8")
             self.assertIn("PDF 获取报告", report)
 
     def test_existing_local_pdf_is_preserved(self) -> None:

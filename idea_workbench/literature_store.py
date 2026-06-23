@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from pathlib import Path
 from typing import Any
 
-from .project import IdeaProject, read_json, write_json, write_text
+from .project import IdeaProject, detail_report_path, read_json, write_json, write_text
 from .render import md_table, timestamp
 
 
-STORE_VERSION = 1
+STORE_VERSION = 2
 PASSAGE_CHARS = 1200
 PASSAGE_OVERLAP = 150
 MAX_PASSAGES_PER_PAPER = 80
@@ -162,9 +164,11 @@ def build_or_load_literature_store(
     reviewer_report: dict[str, Any],
     evidence_qa: dict[str, Any],
     refresh: bool = False,
+    progress=None,
 ) -> dict[str, Any]:
     path = project.state_dir / "literature_store.json"
     input_signature = literature_store_signature(
+        project=project,
         papers=papers,
         novelty_matrix=novelty_matrix,
         reviewer_report=reviewer_report,
@@ -177,8 +181,10 @@ def build_or_load_literature_store(
             and data.get("version") == STORE_VERSION
             and data.get("input_signature") == input_signature
         ):
+            log_progress(progress, f"literature store: cache hit ({data.get('paper_count', 0)} papers, {data.get('passage_count', 0)} PDF passages)")
             return data
 
+    log_progress(progress, f"literature store: rebuilding ({len(papers)} papers)")
     store = build_literature_store(
         project,
         papers=papers,
@@ -190,24 +196,81 @@ def build_or_load_literature_store(
     )
     store["input_signature"] = input_signature
     write_json(path, store)
-    write_text(project.reports_dir / "literature_store.md", render_literature_store(store))
+    write_text(detail_report_path(project, "literature_store.md"), render_literature_store(store))
+    log_progress(progress, f"literature store: ready ({store.get('passage_count', 0)} PDF passages, {store.get('evidence_count', 0)} evidence items)")
     return store
 
 
 def literature_store_signature(
     *,
+    project: IdeaProject,
     papers: list[dict[str, Any]],
     novelty_matrix: dict[str, Any],
     reviewer_report: dict[str, Any],
     evidence_qa: dict[str, Any],
 ) -> dict[str, Any]:
     return {
+        "signature_version": 2,
         "paper_count": len(papers),
-        "paper_keys": [stable_paper_id(paper, index) for index, paper in enumerate(papers[:120], start=1)],
-        "has_novelty_matrix": bool(novelty_matrix.get("rows")),
-        "has_reviewer_report": bool(reviewer_report.get("summary") or reviewer_report.get("strongest_objections")),
-        "has_evidence_qa": bool(evidence_qa),
+        "papers": [paper_signature(project, paper, index) for index, paper in enumerate(papers, start=1)],
+        "novelty_matrix_hash": stable_json_hash(novelty_matrix),
+        "reviewer_report_hash": stable_json_hash(reviewer_report),
+        "evidence_qa_hash": stable_json_hash(evidence_qa),
     }
+
+
+def paper_signature(project: IdeaProject, paper: dict[str, Any], index: int) -> dict[str, Any]:
+    local_pdf = normalize_pdf_path(project, paper)
+    return {
+        "paper_id": stable_paper_id(paper, index),
+        "title": paper.get("title", ""),
+        "year": paper.get("year", "") or str(paper.get("published_date", ""))[:4],
+        "source": paper.get("source", ""),
+        "venue": paper.get("venue", ""),
+        "url": paper.get("url", ""),
+        "doi": paper.get("doi", ""),
+        "arxiv_id": paper.get("arxiv_id", ""),
+        "pdf_url": paper.get("pdf_url", ""),
+        "local_pdf": str(local_pdf) if local_pdf else "",
+        "abstract_hash": stable_text_hash(paper.get("abstract", "")),
+        "pdf_file": file_signature(local_pdf),
+    }
+
+
+def file_signature(path: Path | None) -> dict[str, Any]:
+    if path is None:
+        return {"exists": False}
+    if not path.exists():
+        return {"path": str(path), "exists": False}
+    stat = path.stat()
+    return {
+        "path": str(path),
+        "exists": True,
+        "size": stat.st_size,
+        "mtime_ns": stat.st_mtime_ns,
+        "sha256": sha256_file(path),
+    }
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as file_obj:
+        for chunk in iter(lambda: file_obj.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def stable_json_hash(value: Any) -> str:
+    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+
+
+def stable_text_hash(value: Any) -> str:
+    return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()
+
+
+def log_progress(progress, message: str) -> None:
+    if progress:
+        progress(message)
 
 
 def build_literature_store(

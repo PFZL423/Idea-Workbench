@@ -55,7 +55,7 @@ class EvidenceQaTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             project = self.make_project_with_claims_and_papers(tmp)
             self.run_cli("evidence", str(project), "--mock")
-            report = (project / "reports" / "evidence_qa.md").read_text(encoding="utf-8")
+            report = (project / "reports" / "details" / "evidence_qa.md").read_text(encoding="utf-8")
             self.assertIn("Evidence QA Report", report)
             self.assertIn("MOCK", report)
             jsonl = (project / "evidence" / "claim_evidence.jsonl").read_text(encoding="utf-8")
@@ -67,7 +67,7 @@ class EvidenceQaTest(unittest.TestCase):
             self.run_cli("evidence", str(project))
             status = json.loads((project / "evidence" / "evidence_status.json").read_text(encoding="utf-8"))
             self.assertIn(status["status"], {"unavailable", "needs_pdf_download", "no_pdf", "ok"})
-            self.assertTrue((project / "reports" / "evidence_qa.md").exists())
+            self.assertTrue((project / "reports" / "details" / "evidence_qa.md").exists())
 
 
 if __name__ == "__main__":

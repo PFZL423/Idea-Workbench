@@ -145,6 +145,13 @@ python3 -m idea_workbench run-deep my-idea --dry-run
 
 这一步只写 prompt 和运行说明，不调用 LLM，也不联网检索。
 
+输出位置：
+
+```text
+my-idea/reports/details/run_deep_dry_run.md
+my-idea/traces/dry_run_prompts.json
+```
+
 ### 7. 运行深度流程
 
 ```bash
@@ -162,10 +169,12 @@ python3 -m idea_workbench run-deep my-idea
 
 ```text
 my-idea/reports/final_report_cn.md
-my-idea/reports/novelty_matrix.md
-my-idea/reports/reviewer_report.md
-my-idea/reports/evidence_qa.md
+my-idea/reports/details/novelty_matrix.md
+my-idea/reports/details/reviewer_report.md
+my-idea/reports/details/evidence_qa.md
 ```
+
+运行时会在终端输出简洁进度，包括当前阶段、cache hit/miss、文献数量、Evidence QA 状态和最终输出路径。
 
 ### 8. 可选：运行高质量 idea search
 
@@ -188,14 +197,14 @@ python3 -m idea_workbench idea-search my-idea
 ```text
 my-idea/reports/idea_search.md
 my-idea/state/idea_search.json
-my-idea/reports/literature_store.md
+my-idea/reports/details/literature_store.md
 my-idea/state/literature_store.json
 my-idea/state/idea_search_stages/*.json
 ```
 
 这个命令需要先跑过 `run-deep`，因为它会复用已有的 brief、claims、文献、evidence、novelty matrix 和 reviewer report。
 
-如果你修改了 `papers/*.json` 或本地 PDF，想强制重建证据库：
+如果你修改了 `papers/*.json` 或本地 PDF，工具会根据论文元数据、摘要和 PDF 文件签名自动判断是否重建证据库。想强制重建证据库：
 
 ```bash
 python3 -m idea_workbench idea-search my-idea --refresh-evidence-store
@@ -242,7 +251,7 @@ my-idea/papers/pdfs/
 
 ```text
 my-idea/papers/papers_with_pdfs.json
-my-idea/reports/pdf_downloads.md
+my-idea/reports/details/pdf_downloads.md
 ```
 
 只想看哪些能解析、不下载：
@@ -266,11 +275,14 @@ python3 -m idea_workbench evidence my-idea
 | 文件 | 用途 |
 | --- | --- |
 | `reports/final_report_cn.md` | 总报告 |
-| `reports/novelty_matrix.md` | 每个 claim 的查重/重合风险 |
-| `reports/reviewer_report.md` | 审稿式批判 |
-| `reports/evidence_qa.md` | PDF 证据问答状态和结果 |
-| `reports/search_log.md` | 文献检索记录 |
-| `reports/pdf_downloads.md` | PDF 下载记录 |
+| `reports/idea_search.md` | 多分支 idea search 的最终结果 |
+| `reports/details/novelty_matrix.md` | 每个 claim 的查重/重合风险 |
+| `reports/details/reviewer_report.md` | 审稿式批判 |
+| `reports/details/evidence_qa.md` | PDF 证据问答状态和结果 |
+| `reports/details/search_log.md` | 文献检索记录 |
+| `reports/details/pdf_downloads.md` | PDF 下载记录 |
+
+默认只有核心报告放在 `reports/` 根目录；过程报告放在 `reports/details/`，避免一次运行后根目录太乱。
 
 机器可读中间结果在：
 
@@ -368,7 +380,15 @@ my-idea/
     papers_with_pdfs.json
     pdfs/*.pdf
   reports/
-    literature_store.md
+    final_report_cn.md
+    idea_search.md
+    details/
+      literature_store.md
+      novelty_matrix.md
+      reviewer_report.md
+      evidence_qa.md
+      search_log.md
+      pdf_downloads.md
   state/
     literature_store.json
     idea_search_stages/*.json

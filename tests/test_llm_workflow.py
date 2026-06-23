@@ -63,7 +63,7 @@ class LlmWorkflowTest(unittest.TestCase):
                 "--dry-run",
                 env_extra={"GPT_API_BASE_URL": "", "GPT_API_KEY": ""},
             )
-            self.assertTrue((project / "reports" / "run_deep_dry_run.md").exists())
+            self.assertTrue((project / "reports" / "details" / "run_deep_dry_run.md").exists())
             self.assertTrue((project / "traces" / "dry_run_prompts.json").exists())
 
     def test_run_deep_mock_llm_end_to_end(self) -> None:
@@ -80,8 +80,8 @@ class LlmWorkflowTest(unittest.TestCase):
                 project / "state" / "brief.json",
                 project / "state" / "claims.json",
                 project / "state" / "reviewer_report.json",
-                project / "reports" / "research_brief.md",
-                project / "reports" / "reviewer_report.md",
+                project / "reports" / "details" / "research_brief.md",
+                project / "reports" / "details" / "reviewer_report.md",
                 project / "reports" / "final_report_cn.md",
                 project / "traces" / "llm_calls.jsonl",
             ]
@@ -156,7 +156,7 @@ model_tiers:
                 "--offline-search",
                 env_extra={"GPT_API_BASE_URL": "mock://idea-workbench", "GPT_API_KEY": "mock-key"},
             )
-            evidence_report = (project / "reports" / "evidence_qa.md").read_text(encoding="utf-8")
+            evidence_report = (project / "reports" / "details" / "evidence_qa.md").read_text(encoding="utf-8")
             self.assertIn("Manual Related Work on Tactile World Models", evidence_report)
             self.assertIn(str(pdf_dir / "manual.pdf"), evidence_report)
             self.assertTrue((project / "state" / "run_deep_stages" / "novelty_matrix_v2_batch_1.json").exists())
@@ -181,7 +181,7 @@ model_tiers:
             self.assertEqual(state["parameters"]["branches"], 8)
             self.assertIn("literature_store", state)
             self.assertTrue((project / "state" / "literature_store.json").exists())
-            self.assertTrue((project / "reports" / "literature_store.md").exists())
+            self.assertTrue((project / "reports" / "details" / "literature_store.md").exists())
             self.assertTrue((project / "state" / "idea_search_stages" / "branches_8_batch_1.json").exists())
             self.assertTrue(state["final"]["final_ideas"])
 
@@ -204,7 +204,7 @@ model_tiers:
                 env_extra={"GPT_API_BASE_URL": "", "GPT_API_KEY": ""},
             )
 
-            self.assertTrue((project / "reports" / "idea_search_dry_run.md").exists())
+            self.assertTrue((project / "reports" / "details" / "idea_search_dry_run.md").exists())
             prompt_path = project / "traces" / "idea_search_dry_run_prompts.json"
             self.assertTrue(prompt_path.exists())
             prompts = prompt_path.read_text(encoding="utf-8")

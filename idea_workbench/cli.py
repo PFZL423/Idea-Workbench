@@ -24,8 +24,10 @@ from .llm_workflow import (
 from .pdfs import run_pdf_fetch
 from .project import (
     assert_project,
+    detail_report_path,
     init_project,
     load_config,
+    read_detail_report,
     read_json,
     read_text,
     write_json,
@@ -167,7 +169,7 @@ def cmd_init(args: argparse.Namespace) -> int:
 def cmd_decompose(args: argparse.Namespace) -> int:
     project = assert_project(args.project)
     decomposition = ensure_decomposition(project, refresh=True)
-    print(f"wrote {project.reports_dir / 'decomposition.md'}")
+    print(f"wrote {detail_report_path(project, 'decomposition.md')}")
     print(f"claims: {len(decomposition.get('claims', []))}")
     return 0
 
@@ -186,7 +188,7 @@ def cmd_search(args: argparse.Namespace) -> int:
     papers, errors = run_search(queries, sources=sources, limit=limit, offline=args.offline)
     write_json(project.papers_dir / "api_papers.json", papers)
     write_json(project.logs_dir / "search_errors.json", errors)
-    write_text(project.reports_dir / "search_log.md", render_search_log(queries, papers, errors))
+    write_text(detail_report_path(project, "search_log.md"), render_search_log(queries, papers, errors))
 
     print(f"wrote {project.queries_path}")
     print(f"papers: {len(papers)}")
@@ -230,7 +232,7 @@ def cmd_pdfs(args: argparse.Namespace) -> int:
 def cmd_matrix(args: argparse.Namespace) -> int:
     project = assert_project(args.project)
     matrix = ensure_matrix(project, refresh=True)
-    print(f"wrote {project.reports_dir / 'novelty_matrix.md'}")
+    print(f"wrote {detail_report_path(project, 'novelty_matrix.md')}")
     print(f"claims: {len(matrix.get('rows', []))}")
     return 0
 
@@ -238,7 +240,7 @@ def cmd_matrix(args: argparse.Namespace) -> int:
 def cmd_refine(args: argparse.Namespace) -> int:
     project = assert_project(args.project)
     ideas = ensure_refined_ideas(project, refresh=True)
-    print(f"wrote {project.reports_dir / 'refined_ideas.md'}")
+    print(f"wrote {detail_report_path(project, 'refined_ideas.md')}")
     print(f"ideas: {len(ideas)}")
     return 0
 
@@ -246,7 +248,7 @@ def cmd_refine(args: argparse.Namespace) -> int:
 def cmd_experiment_plan(args: argparse.Namespace) -> int:
     project = assert_project(args.project)
     plan = ensure_experiment_plan(project, refresh=True)
-    print(f"wrote {project.reports_dir / 'experiment_plan.md'}")
+    print(f"wrote {detail_report_path(project, 'experiment_plan.md')}")
     print(f"phases: {len(plan.get('phases', []))}")
     return 0
 
@@ -318,7 +320,7 @@ def ensure_decomposition(project: Any, *, refresh: bool) -> dict[str, Any]:
     config = load_config(project)
     decomposition = decompose_seed(seed_text, config)
     write_json(state_path, decomposition)
-    write_text(project.reports_dir / "decomposition.md", render_decomposition(decomposition))
+    write_text(detail_report_path(project, "decomposition.md"), render_decomposition(decomposition))
     return decomposition
 
 
@@ -331,7 +333,7 @@ def ensure_matrix(project: Any, *, refresh: bool) -> dict[str, Any]:
     config = load_config(project)
     matrix = build_novelty_matrix(decomposition, papers, config)
     write_json(state_path, matrix)
-    write_text(project.reports_dir / "novelty_matrix.md", render_matrix(matrix))
+    write_text(detail_report_path(project, "novelty_matrix.md"), render_matrix(matrix))
     return matrix
 
 
@@ -343,7 +345,7 @@ def ensure_refined_ideas(project: Any, *, refresh: bool) -> list[dict[str, Any]]
     matrix = ensure_matrix(project, refresh=False)
     ideas = refine_ideas(decomposition, matrix)
     write_json(state_path, ideas)
-    write_text(project.reports_dir / "refined_ideas.md", render_refined_ideas(ideas))
+    write_text(detail_report_path(project, "refined_ideas.md"), render_refined_ideas(ideas))
     return ideas
 
 
@@ -355,27 +357,27 @@ def ensure_experiment_plan(project: Any, *, refresh: bool) -> dict[str, Any]:
     matrix = ensure_matrix(project, refresh=False)
     plan = build_experiment_plan(decomposition, matrix)
     write_json(state_path, plan)
-    write_text(project.reports_dir / "experiment_plan.md", render_experiment_plan(plan))
+    write_text(detail_report_path(project, "experiment_plan.md"), render_experiment_plan(plan))
     return plan
 
 
 def ensure_final_report(project: Any) -> Path:
-    decomposition = read_text(project.reports_dir / "decomposition.md")
-    matrix = read_text(project.reports_dir / "novelty_matrix.md")
-    refined = read_text(project.reports_dir / "refined_ideas.md")
-    experiment = read_text(project.reports_dir / "experiment_plan.md")
+    decomposition = read_detail_report(project, "decomposition.md")
+    matrix = read_detail_report(project, "novelty_matrix.md")
+    refined = read_detail_report(project, "refined_ideas.md")
+    experiment = read_detail_report(project, "experiment_plan.md")
     if not decomposition:
         ensure_decomposition(project, refresh=False)
-        decomposition = read_text(project.reports_dir / "decomposition.md")
+        decomposition = read_detail_report(project, "decomposition.md")
     if not matrix:
         ensure_matrix(project, refresh=False)
-        matrix = read_text(project.reports_dir / "novelty_matrix.md")
+        matrix = read_detail_report(project, "novelty_matrix.md")
     if not refined:
         ensure_refined_ideas(project, refresh=False)
-        refined = read_text(project.reports_dir / "refined_ideas.md")
+        refined = read_detail_report(project, "refined_ideas.md")
     if not experiment:
         ensure_experiment_plan(project, refresh=False)
-        experiment = read_text(project.reports_dir / "experiment_plan.md")
+        experiment = read_detail_report(project, "experiment_plan.md")
     final_path = project.reports_dir / "final_report_cn.md"
     write_text(final_path, render_final_report(decomposition, matrix, refined, experiment))
     return final_path
