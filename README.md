@@ -4,6 +4,14 @@
 
 它适合这种场景：你已经有一个不成熟想法，也有一些相关论文，想先判断“有没有人做过、哪里最危险、下一步该怎么查和怎么实验”。
 
+第一次使用时，先按这条主线走：
+
+```text
+写 seed.md → 配好 API key → doctor 检查 → run-deep 生成 evidence pack → research 生成最终 proposal
+```
+
+`idea-search` 是可选的扩展工具：当你想主动生成很多分支、再筛选少数方向时再跑它。只想得到一份主 research proposal 时，通常先跑 `run-deep`，再跑 `research` 就够了。
+
 ## 推荐主流程
 
 ### 1. Clone 并安装
@@ -42,7 +50,11 @@ my-idea/seed.md
 - 担心已有工作覆盖的部分
 - 希望工具重点查的点
 
-### 3. 导入你已经知道的相关文献
+### 3. 可选：导入你已经知道的相关文献
+
+这一步不是必需的。你没有现成论文时，可以先跳过，`run-deep` 会根据 seed 自动检索。
+
+如果你已经知道几篇关键论文，建议手动导入；这通常会提高 novelty 检查和 reviewer critique 的质量。
 
 推荐把 PDF 放到：
 
@@ -152,7 +164,7 @@ my-idea/reports/details/run_deep_dry_run.md
 my-idea/traces/dry_run_prompts.json
 ```
 
-### 7. 运行深度流程
+### 7. 生成 evidence pack
 
 ```bash
 python3 -m idea_workbench run-deep my-idea
@@ -165,10 +177,11 @@ python3 -m idea_workbench run-deep my-idea
 - 已有 `local_pdf`
 - 自动检索得到的论文元数据
 
-它会生成：
+`run-deep` 的定位是给后续 `research` 准备证据和初筛结果，不是最终研究方案报告。它会生成：
 
 ```text
-my-idea/reports/final_report_cn.md
+my-idea/reports/evidence_pack_cn.md
+my-idea/reports/final_report_cn.md   # 兼容旧版本；内容同 evidence pack
 my-idea/reports/details/novelty_matrix.md
 my-idea/reports/details/reviewer_report.md
 my-idea/reports/details/evidence_qa.md
@@ -176,7 +189,47 @@ my-idea/reports/details/evidence_qa.md
 
 运行时会在终端输出简洁进度，包括当前阶段、cache hit/miss、文献数量、Evidence QA 状态和最终输出路径。
 
-### 8. 可选：运行高质量 idea search
+### 8. 运行主 research proposal workflow
+
+先完成第 7 步 `run-deep`，因为 `research` 会复用它生成的 brief、claims、文献证据、novelty matrix 和 reviewer report。
+
+如果你希望生成过程本身就带审查和修正，而不是先生成一批再最后筛选，运行：
+
+```bash
+python3 -m idea_workbench research my-idea
+```
+
+默认流程：
+
+```text
+机会挖掘 → Builder 生成少量候选 → comprehensive discovery critic → Builder 修正/转向 → Chair 生成最终 proposal
+```
+
+它的设计重点：
+
+- 不追求 Transformer / RL 级别范式创新。
+- 鼓励高质量机制迁移、failure mode 挖掘、问题重定义、benchmark / evaluation gap 和局部 method 改造。
+- Critic 不只是挑错，也必须给 upgrade opportunity、better framing、promising pivot。
+- Reviser 必须实质性改造候选 idea，不能只压缩或复述。
+- 最终 `research.md` 会按 proposal 结构写清：研究问题、目标问题、方法草图、机制设计、训练/优化信号、实验协议、novelty boundary、stronger baseline、证据基础、待验证假设和失败条件。
+- 内部 JSON 字段保持英文；人看的报告默认中文，Transformer、RL、WAM、diffusion model、world model、benchmark、baseline 等术语保留英文。
+
+输出：
+
+```text
+my-idea/reports/research.md
+my-idea/reports/details/research_rounds.md
+my-idea/state/research_workflow.json
+my-idea/state/research_stages/*.json
+```
+
+可调预算：
+
+```bash
+python3 -m idea_workbench research my-idea --ideas 5 --final 3
+```
+
+### 9. 可选：运行高质量 idea search
 
 如果你希望工具不只是“打磨原想法”，而是主动生成多个高潜力分支并筛选，运行：
 
@@ -220,43 +273,6 @@ python3 -m idea_workbench idea-search my-idea --branches 20 --shortlist 5 --fina
 
 ```bash
 python3 -m idea_workbench idea-search my-idea --dry-run
-```
-
-### 9. 可选：运行闭环 research workflow
-
-如果你希望生成过程本身就带审查和修正，而不是先生成一批再最后筛选，运行：
-
-```bash
-python3 -m idea_workbench research my-idea
-```
-
-默认流程：
-
-```text
-机会挖掘 → Builder 生成少量候选 → comprehensive discovery critic → Builder 修正/转向 → Chair 最终选择
-```
-
-它的设计重点：
-
-- 不追求 Transformer / RL 级别范式创新。
-- 鼓励高质量机制迁移、failure mode 挖掘、问题重定义、benchmark / evaluation gap 和局部 method 改造。
-- Critic 不只是挑错，也必须给 upgrade opportunity、better framing、promising pivot。
-- Killer 逻辑被收进 comprehensive critic，只在合理修正后仍不可救时 hard reject。
-- 内部 JSON 字段保持英文；人看的报告默认中文，Transformer、RL、WAM、diffusion model、world model、benchmark、baseline 等术语保留英文。
-
-输出：
-
-```text
-my-idea/reports/research.md
-my-idea/reports/details/research_rounds.md
-my-idea/state/research_workflow.json
-my-idea/state/research_stages/*.json
-```
-
-可调预算：
-
-```bash
-python3 -m idea_workbench research my-idea --ideas 5 --final 3
 ```
 
 ## 可选：下载检索结果里的 PDF
@@ -307,13 +323,20 @@ python3 -m idea_workbench evidence my-idea
 
 ## 输出怎么看
 
-优先看这几个文件：
+第一次看结果时：
+
+- 只跑了 `run-deep`：先看 `reports/evidence_pack_cn.md`。
+- 跑完了 `research`：先看 `reports/research.md`，这是主 proposal 报告。
+- 额外跑了 `idea-search`：再看 `reports/idea_search.md`，它是多分支探索结果。
+
+常见文件含义：
 
 | 文件 | 用途 |
 | --- | --- |
-| `reports/final_report_cn.md` | 总报告 |
+| `reports/research.md` | 主报告：闭环生成后的完整 research proposal |
+| `reports/evidence_pack_cn.md` | `run-deep` 生成的证据包和初筛结果 |
+| `reports/final_report_cn.md` | 旧版本兼容路径，内容同 evidence pack |
 | `reports/idea_search.md` | 多分支 idea search 的最终结果 |
-| `reports/research.md` | 闭环 Builder/Critic/Reviser 的最终结果 |
 | `reports/details/novelty_matrix.md` | 每个 claim 的查重/重合风险 |
 | `reports/details/reviewer_report.md` | 审稿式批判 |
 | `reports/details/evidence_qa.md` | PDF 证据问答状态和结果 |
@@ -353,14 +376,19 @@ python3 -m idea_workbench run-deep my-idea --offline-search
 
 ## 常用命令参考
 
-正常使用通常只需要：
+最短主流程：
 
 ```bash
 python3 -m idea_workbench doctor my-idea
 python3 -m idea_workbench run-deep my-idea --dry-run
 python3 -m idea_workbench run-deep my-idea
-python3 -m idea_workbench idea-search my-idea
 python3 -m idea_workbench research my-idea
+```
+
+需要多分支探索、PDF 下载或单独重跑 evidence 时再用：
+
+```bash
+python3 -m idea_workbench idea-search my-idea
 python3 -m idea_workbench pdfs my-idea --top 20
 python3 -m idea_workbench evidence my-idea
 ```
@@ -420,6 +448,7 @@ my-idea/
     papers_with_pdfs.json
     pdfs/*.pdf
   reports/
+    evidence_pack_cn.md
     final_report_cn.md
     idea_search.md
     research.md

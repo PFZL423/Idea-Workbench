@@ -352,13 +352,25 @@ RESEARCH_DECISION_SCHEMA = {
         {
             "rank": "integer",
             "idea_id": "R1",
+            "source_idea_ids": ["R1"],
             "name": "string",
             "decision": "continue|needs_evidence|pivot|discard",
+            "proposal_summary": "string",
+            "research_question": "string",
+            "target_problem": "string",
             "why_selected": "string",
             "central_insight": "string",
+            "proposed_method": "string",
+            "mechanism_design": "string",
+            "training_signal": "string",
+            "evaluation_protocol": "string",
+            "expected_contribution": "string",
+            "why_this_is_better_than_initial_version": "string",
             "novelty_boundary": "string",
             "stronger_baseline_to_beat": "string",
             "minimum_discriminating_experiment": "string",
+            "evidence_basis": ["string"],
+            "open_assumptions": ["string"],
             "failure_conditions": ["string"],
             "next_literature_checks": ["string"],
             "next_experiment_checks": ["string"],
@@ -711,20 +723,43 @@ def normalize_research_decision(data: Any) -> dict[str, Any]:
     ideas = obj.get("final_ideas")
     if not isinstance(ideas, list) or not ideas:
         raise SchemaError("ResearchChairDecision.final_ideas must be a non-empty list")
+    required_final_fields = (
+        "research_question",
+        "proposed_method",
+        "evaluation_protocol",
+        "novelty_boundary",
+        "minimum_discriminating_experiment",
+    )
     for index, item in enumerate(ideas, start=1):
         idea = ensure_dict(item, "ResearchFinalIdea")
         idea.setdefault("rank", index)
         idea.setdefault("idea_id", "")
+        idea["source_idea_ids"] = ensure_string_list(idea.get("source_idea_ids", []))
         idea.setdefault("name", "")
         idea.setdefault("decision", "needs_evidence")
+        idea.setdefault("proposal_summary", "")
+        idea.setdefault("research_question", "")
+        idea.setdefault("target_problem", "")
         idea.setdefault("why_selected", "")
         idea.setdefault("central_insight", "")
+        idea.setdefault("proposed_method", "")
+        idea.setdefault("mechanism_design", "")
+        idea.setdefault("training_signal", "")
+        idea.setdefault("evaluation_protocol", "")
+        idea.setdefault("expected_contribution", "")
+        idea.setdefault("why_this_is_better_than_initial_version", "")
         idea.setdefault("novelty_boundary", "")
         idea.setdefault("stronger_baseline_to_beat", "")
         idea.setdefault("minimum_discriminating_experiment", "")
+        idea["evidence_basis"] = ensure_string_list(idea.get("evidence_basis", []))
+        idea["open_assumptions"] = ensure_string_list(idea.get("open_assumptions", []))
         idea["failure_conditions"] = ensure_string_list(idea.get("failure_conditions", []))
         idea["next_literature_checks"] = ensure_string_list(idea.get("next_literature_checks", []))
         idea["next_experiment_checks"] = ensure_string_list(idea.get("next_experiment_checks", []))
+        missing = [field for field in required_final_fields if not str(idea.get(field, "")).strip()]
+        if missing:
+            name = idea.get("name") or idea.get("idea_id") or f"rank {index}"
+            raise SchemaError(f"ResearchFinalIdea {name} missing required proposal fields: {', '.join(missing)}")
     obj.setdefault("summary", "")
     obj["promising_pivots"] = ensure_string_list(obj.get("promising_pivots", []))
     rejected = obj.get("rejected", [])

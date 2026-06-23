@@ -287,10 +287,10 @@ def run_deep(
     write_json(project.state_dir / "experiment_plan.json", experiment)
     write_text(detail_report_path(project, "experiment_plan.md"), render_llm_experiment(experiment))
 
-    final_path = project.reports_dir / "final_report_cn.md"
-    write_text(
-        final_path,
-        render_final_report(
+    evidence_pack = (
+        "# run-deep Evidence Pack\n\n"
+        "这个文件是 research 阶段的证据输入包，不是最终研究方案报告。最终 proposal 请看 `reports/research.md`。\n\n"
+        + render_final_report(
             read_detail_report(project, "decomposition.md"),
             read_detail_report(project, "novelty_matrix.md"),
             read_detail_report(project, "refined_ideas.md"),
@@ -299,10 +299,14 @@ def run_deep(
         + "\n---\n\n"
         + read_detail_report(project, "evidence_qa.md")
         + "\n---\n\n"
-        + read_detail_report(project, "reviewer_report.md"),
+        + read_detail_report(project, "reviewer_report.md")
     )
-    progress(f"run-deep: wrote {final_path}")
-    return final_path
+    evidence_pack_path = project.reports_dir / "evidence_pack_cn.md"
+    write_text(evidence_pack_path, evidence_pack)
+    # Compatibility for existing scripts/tests that still expect this path.
+    write_text(project.reports_dir / "final_report_cn.md", evidence_pack)
+    progress(f"run-deep: wrote evidence pack {evidence_pack_path}")
+    return evidence_pack_path
 
 
 def run_literature(project: IdeaProject, *, offline: bool, limit: int | None, sources: list[str] | None) -> Path:
@@ -668,7 +672,7 @@ def run_research(
     revised = cached_stage(
         stage_dir / "revised_ideas.json",
         {
-            "stage_version": 1,
+            "stage_version": 2,
             "context": reviser_context,
             "ideas": summarize_research_ideas(initial_ideas),
             "critic": summarize_research_critic(critic),
@@ -692,7 +696,7 @@ def run_research(
     decision = cached_stage(
         stage_dir / f"chair_decision_{params['final']}.json",
         {
-            "stage_version": 1,
+            "stage_version": 2,
             "context": chair_context,
             "opportunities": summarize_research_opportunities(opportunities),
             "critic": summarize_research_critic(critic),
@@ -2378,7 +2382,11 @@ def render_research(result: dict[str, Any]) -> str:
     params = result.get("parameters", {})
     store = result.get("literature_store", {})
     lines = [
-        "# 闭环 Research Workflow 报告",
+        "# Research Proposal 报告",
+        "",
+        "这个文件是主报告：它把闭环 Builder / Critic / Reviser / Chair 的结果整理成可直接阅读的研究方案。内部候选编号只保留在 `reports/details/research_rounds.md`，不作为最终排名或方案名称。",
+        "",
+        "## 运行摘要",
         "",
         f"- 初始候选数：{params.get('ideas', '')}",
         f"- 最终选择数：{params.get('final', '')}",
@@ -2386,42 +2394,79 @@ def render_research(result: dict[str, Any]) -> str:
         f"- PDF passages：{store.get('passages', '')}",
         f"- evidence items：{store.get('evidence_items', '')}",
         "",
-        "## 总结",
+        "## 总体结论",
         "",
         final_result.get("summary", ""),
         "",
-        "## 最终建议",
+        "## 最终研究方案",
         "",
     ]
     final_ideas = sorted(final_result.get("final_ideas", []), key=lambda item: item.get("rank", 999))
     if not final_ideas:
         lines.append("暂无。")
     for idea in final_ideas:
+        evidence_basis = idea.get("evidence_basis", [])
+        open_assumptions = idea.get("open_assumptions", [])
         lines.extend(
             [
-                f"### {idea.get('rank', '')}. {idea.get('name', '')}",
+                f"### 方案 {idea.get('rank', '')}：{idea.get('name', '')}",
                 "",
                 f"- 决策：{idea.get('decision', '')}",
-                f"- 为什么保留：{idea.get('why_selected', '')}",
+                f"- 方案概览：{idea.get('proposal_summary') or idea.get('why_selected', '')}",
+                f"- 研究问题：{idea.get('research_question', '')}",
+                f"- 目标问题：{idea.get('target_problem', '')}",
+                "",
+                "#### 核心 Idea",
+                "",
                 f"- central insight：{idea.get('central_insight', '')}",
+                f"- proposed method：{idea.get('proposed_method', '')}",
+                f"- mechanism design：{idea.get('mechanism_design', '')}",
+                f"- training / optimization signal：{idea.get('training_signal', '')}",
+                f"- expected contribution：{idea.get('expected_contribution', '')}",
+                f"- 相比初版的进步：{idea.get('why_this_is_better_than_initial_version', '')}",
+                "",
+                "#### 边界与实验",
+                "",
                 f"- novelty boundary：{idea.get('novelty_boundary', '')}",
                 f"- stronger baseline：{idea.get('stronger_baseline_to_beat', '')}",
+                f"- evaluation protocol：{idea.get('evaluation_protocol', '')}",
                 f"- 最小区分实验：{idea.get('minimum_discriminating_experiment', '')}",
                 "",
-                "失败条件：",
+                "#### 证据基础与待验证假设",
             ]
         )
+        if evidence_basis:
+            lines.append("")
+            lines.append("证据基础：")
+            for item in evidence_basis:
+                lines.append(f"- {item}")
+        else:
+            lines.append("- 证据基础：暂无明确证据条目。")
+        lines.append("")
+        if open_assumptions:
+            lines.append("待验证假设：")
+            for item in open_assumptions:
+                lines.append(f"- {item}")
+        else:
+            lines.append("- 待验证假设：暂无。")
+        lines.extend(["", "#### 风险与失败条件", ""])
         for item in idea.get("failure_conditions", []):
             lines.append(f"- {item}")
-        lines.extend(["", "下一步文献检查："])
+        if not idea.get("failure_conditions"):
+            lines.append("- 暂无。")
+        lines.extend(["", "#### 下一步检查", "", "文献检查："])
         for item in idea.get("next_literature_checks", []):
             lines.append(f"- {item}")
-        lines.extend(["", "下一步实验检查："])
+        if not idea.get("next_literature_checks"):
+            lines.append("- 暂无。")
+        lines.extend(["", "实验检查："])
         for item in idea.get("next_experiment_checks", []):
             lines.append(f"- {item}")
+        if not idea.get("next_experiment_checks"):
+            lines.append("- 暂无。")
         lines.append("")
 
-    lines.extend(["## Promising Pivots", ""])
+    lines.extend(["## 可保留 Pivot", ""])
     for item in final_result.get("promising_pivots", []):
         lines.append(f"- {item}")
     if not final_result.get("promising_pivots"):
@@ -2437,7 +2482,9 @@ def render_research(result: dict[str, Any]) -> str:
 
 def render_research_rounds(result: dict[str, Any]) -> str:
     lines = [
-        "# Research Workflow Rounds",
+        "# Research Workflow 生成过程详情",
+        "",
+        "这里保留内部候选编号和每轮审查记录，用于追踪最终方案从哪里来。主报告请看 `reports/research.md`。",
         "",
         "## Opportunities",
         "",

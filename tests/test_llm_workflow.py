@@ -82,6 +82,7 @@ class LlmWorkflowTest(unittest.TestCase):
                 project / "state" / "reviewer_report.json",
                 project / "reports" / "details" / "research_brief.md",
                 project / "reports" / "details" / "reviewer_report.md",
+                project / "reports" / "evidence_pack_cn.md",
                 project / "reports" / "final_report_cn.md",
                 project / "traces" / "llm_calls.jsonl",
             ]
@@ -196,12 +197,36 @@ model_tiers:
             report = (project / "reports" / "research.md").read_text(encoding="utf-8")
             rounds = (project / "reports" / "details" / "research_rounds.md").read_text(encoding="utf-8")
             state = json.loads((project / "state" / "research_workflow.json").read_text(encoding="utf-8"))
-            self.assertIn("闭环 Research Workflow 报告", report)
+            self.assertIn("Research Proposal 报告", report)
+            self.assertIn("研究问题", report)
+            self.assertIn("相比初版的进步", report)
             self.assertIn("WAM", report)
             self.assertIn("Critic Panel", rounds)
             self.assertEqual(state["parameters"]["ideas"], 4)
             self.assertTrue(state["final"]["final_ideas"])
             self.assertTrue((project / "state" / "research_stages" / "critic_panel.json").exists())
+
+    def test_research_decision_requires_proposal_fields(self) -> None:
+        from idea_workbench.schemas import SchemaError, normalize_research_decision
+
+        with self.assertRaisesRegex(SchemaError, "missing required proposal fields"):
+            normalize_research_decision(
+                {
+                    "summary": "x",
+                    "final_ideas": [
+                        {
+                            "rank": 1,
+                            "idea_id": "R1",
+                            "name": "Incomplete proposal",
+                            "research_question": "What should be tested?",
+                            "proposed_method": "",
+                            "evaluation_protocol": "Run a controlled benchmark.",
+                            "novelty_boundary": "Diagnostic contribution.",
+                            "minimum_discriminating_experiment": "Compare against a stronger baseline.",
+                        }
+                    ],
+                }
+            )
 
     def test_idea_search_dry_run_writes_prompts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
