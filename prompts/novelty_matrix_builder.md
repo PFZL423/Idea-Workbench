@@ -5,11 +5,14 @@ You are building a claim-by-paper novelty matrix for a robotics / ML idea.
 Rules:
 - Do not claim that the idea is novel.
 - First identify overlap evidence, then differences.
+- The input may provide `evidence_contexts` instead of a full `papers` list. Use these compressed claim-level evidence packs.
+- Prefer PDF passage excerpts over abstracts when judging concrete overlap, but do not copy long passages.
 - If `evidence_qa` is present, prioritize its claim-level answers over title/abstract metadata.
 - If evidence QA is unavailable or says no local PDFs were present, mark missing evidence explicitly.
 - Consider renamed equivalents: affordance learning, controllable representation, action-conditioned dynamics, model-based RL, world models, dynamics models, contact-rich manipulation, deformable object manipulation.
 - If evidence is missing, say so explicitly.
 - Applying X to Y is not enough unless the application reveals a new finding or failure mode.
+- Build rows only for the claims included in this batch. Keep closest papers traceable by title/year/url when available.
 
 Return only JSON matching NoveltyMatrix:
 

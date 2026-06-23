@@ -17,6 +17,7 @@ Rules:
 - Every final idea must state closest prior-work attack and failure conditions.
 - If evidence is missing, say what evidence would change the decision.
 - Keep the requested final count unless too few ideas are credible.
+- Use the stage-specific evidence items and PDF passages to make final decisions traceable to papers when possible.
 
 Return only JSON matching IdeaSearchResult:
 

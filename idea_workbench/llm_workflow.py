@@ -6,6 +6,7 @@ from typing import Any
 
 from .evidence import detect_evidence_backend, run_evidence_qa
 from .heuristics import build_experiment_plan, build_novelty_matrix, decompose_seed, refine_ideas
+from .literature_store import build_or_load_literature_store, retrieve_novelty_claim_context, retrieve_stage_context
 from .models import ModelConfigError, call_json, doctor as model_doctor, get_model_tier
 from .project import IdeaProject, load_config, read_json, read_text, write_json, write_text
 from .render import (
@@ -46,7 +47,7 @@ from .schemas import (
     normalize_strengthened_ideas,
 )
 from .search import run_search
-from .tracing import TraceLogger
+from .tracing import TraceLogger, text_hash
 
 
 PROMPT_DIR = Path(__file__).resolve().parents[1] / "prompts"
@@ -134,9 +135,33 @@ def run_deep(
 
     assert_llm_ready(config)
 
-    brief = extract_brief(config, trace, seed_text)
-    claims_doc = decompose_claims(config, trace, seed_text, brief)
-    queries = plan_queries(config, trace, seed_text, brief, claims_doc)
+    stage_dir = project.state_dir / "run_deep_stages"
+    stage_dir.mkdir(parents=True, exist_ok=True)
+
+    brief = cached_json_stage(
+        stage_dir,
+        "brief",
+        project.state_dir / "brief.json",
+        {"stage_version": 1, "seed": seed_text},
+        lambda: extract_brief(config, trace, seed_text),
+        accept=lambda value: isinstance(value, dict) and bool(value.get("topic") or value.get("problem_statement")),
+    )
+    claims_doc = cached_json_stage(
+        stage_dir,
+        "claims",
+        project.state_dir / "claims.json",
+        {"stage_version": 1, "seed": seed_text, "brief": brief},
+        lambda: decompose_claims(config, trace, seed_text, brief),
+        accept=lambda value: isinstance(value, dict) and bool(value.get("claims")),
+    )
+    queries = cached_json_stage(
+        stage_dir,
+        "queries",
+        project.state_dir / "queries.json",
+        {"stage_version": 1, "seed": seed_text, "brief": brief, "claims": claims_doc},
+        lambda: plan_queries(config, trace, seed_text, brief, claims_doc),
+        accept=lambda value: isinstance(value, list) and bool(value),
+    )
 
     write_json(project.state_dir / "brief.json", brief)
     write_json(project.state_dir / "claims.json", claims_doc)
@@ -150,7 +175,22 @@ def run_deep(
 
     max_results = limit or int(config.get("max_results_per_query", 5))
     search_sources = sources or parse_sources_from_config(config)
-    papers, errors = run_search(queries, sources=search_sources, limit=max_results, offline=offline_search)
+    search_result = cached_json_stage(
+        stage_dir,
+        "paper_search",
+        stage_dir / "paper_search.json",
+        {
+            "stage_version": 1,
+            "queries": queries,
+            "sources": search_sources,
+            "limit": max_results,
+            "offline": offline_search,
+        },
+        lambda: dict_from_search_result(run_search(queries, sources=search_sources, limit=max_results, offline=offline_search)),
+        accept=lambda value: isinstance(value, dict) and isinstance(value.get("papers"), list),
+    )
+    papers = search_result.get("papers", [])
+    errors = search_result.get("errors", [])
     write_json(project.papers_dir / "api_papers.json", papers)
     papers = merge_paper_lists(papers, load_project_papers(project))
     write_json(project.logs_dir / "search_errors.json", errors)
@@ -158,19 +198,54 @@ def run_deep(
 
     evidence = run_evidence_qa(project, config, claims_doc, papers)
 
-    matrix = build_llm_matrix(config, trace, brief, claims_doc, papers, evidence)
+    matrix = cached_json_stage(
+        stage_dir,
+        "novelty_matrix_v2",
+        stage_dir / "novelty_matrix_v2_merged.json",
+        {
+            "stage_version": 2,
+            "brief": brief,
+            "claims": claims_doc,
+            "papers": papers_for_cache(papers),
+            "evidence": evidence_for_cache(evidence),
+            "batch_size": max(1, int(config.get("novelty_matrix_claim_batch_size", 1))),
+        },
+        lambda: build_llm_matrix(config, trace, project, brief, claims_doc, papers, evidence),
+        accept=lambda value: isinstance(value, dict) and bool(value.get("rows")),
+    )
     write_json(project.state_dir / "novelty_matrix.json", matrix)
     write_text(project.reports_dir / "novelty_matrix.md", render_matrix(matrix))
 
-    review = review_project(config, trace, brief, claims_doc, matrix)
+    review = cached_json_stage(
+        stage_dir,
+        "reviewer_report",
+        project.state_dir / "reviewer_report.json",
+        {"stage_version": 2, "brief": brief, "claims": claims_doc, "novelty_matrix": matrix},
+        lambda: review_project(config, trace, brief, claims_doc, matrix),
+        accept=lambda value: isinstance(value, dict) and bool(value.get("summary")),
+    )
     write_json(project.state_dir / "reviewer_report.json", review)
     write_text(project.reports_dir / "reviewer_report.md", render_review(review))
 
-    ideas = refine_with_llm(config, trace, brief, matrix, review)
+    ideas = cached_json_stage(
+        stage_dir,
+        "refined_ideas",
+        project.state_dir / "refined_ideas.json",
+        {"stage_version": 2, "brief": brief, "novelty_matrix": matrix, "review": review},
+        lambda: refine_with_llm(config, trace, brief, matrix, review),
+        accept=lambda value: isinstance(value, list) and bool(value),
+    )
     write_json(project.state_dir / "refined_ideas.json", ideas)
     write_text(project.reports_dir / "refined_ideas.md", render_llm_ideas(ideas))
 
-    experiment = plan_experiment_with_llm(config, trace, brief, matrix, review, ideas)
+    experiment = cached_json_stage(
+        stage_dir,
+        "experiment_plan",
+        project.state_dir / "experiment_plan.json",
+        {"stage_version": 2, "brief": brief, "novelty_matrix": matrix, "review": review, "ideas": ideas},
+        lambda: plan_experiment_with_llm(config, trace, brief, matrix, review, ideas),
+        accept=lambda value: isinstance(value, dict) and bool(value.get("objective")),
+    )
     write_json(project.state_dir / "experiment_plan.json", experiment)
     write_text(project.reports_dir / "experiment_plan.md", render_llm_experiment(experiment))
 
@@ -297,30 +372,115 @@ def run_idea_search(
     shortlist: int = 5,
     final: int = 3,
     dry_run: bool = False,
+    refresh_evidence_store: bool = False,
 ) -> Path:
     config = load_config(project)
     trace = TraceLogger(project.traces_dir)
-    context = load_idea_search_context(project)
+    base_context = load_idea_search_base_context(project)
     params = {
         "branches": max(1, branches),
         "shortlist": max(1, shortlist),
         "final": max(1, final),
     }
+    if not dry_run:
+        assert_llm_ready(config, tiers=("strong", "frontier"))
+
+    papers = load_project_papers(project)
+    literature_store = build_or_load_literature_store(
+        project,
+        papers=papers,
+        brief=base_context["brief"],
+        claims=base_context["claims"],
+        novelty_matrix=base_context["novelty_matrix"],
+        reviewer_report=base_context["reviewer_report"],
+        evidence_qa=base_context["evidence_qa"],
+        refresh=refresh_evidence_store,
+    )
 
     if dry_run:
-        return write_idea_search_dry_run(project, context, params)
+        return write_idea_search_dry_run(project, base_context, literature_store, params)
 
-    assert_llm_ready(config, tiers=("strong", "frontier"))
+    stage_dir = project.state_dir / "idea_search_stages"
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    if refresh_evidence_store:
+        clear_stage_cache(stage_dir)
 
-    bottlenecks = extract_bottlenecks(config, trace, context)
-    transfers = map_mechanism_transfers(config, trace, context, bottlenecks)
-    branches_doc = generate_idea_branches(config, trace, context, bottlenecks, transfers, params["branches"])
-    screen = screen_idea_branches(config, trace, context, branches_doc, params["shortlist"])
-    strengthened = strengthen_ideas(config, trace, context, branches_doc, screen)
-    final_result = decide_ideas(config, trace, context, bottlenecks, transfers, branches_doc, screen, strengthened, params["final"])
+    bottleneck_context = retrieve_stage_context(store=literature_store, stage="bottleneck_extractor", base_context=base_context)
+    bottlenecks = cached_stage(
+        stage_dir / "bottlenecks.json",
+        lambda: extract_bottlenecks(config, trace, bottleneck_context),
+    )
+
+    transfer_context = retrieve_stage_context(
+        store=literature_store,
+        stage="mechanism_transfer_mapper",
+        base_context=base_context,
+        extra_context={"bottleneck_summary": summarize_bottlenecks(bottlenecks)},
+    )
+    transfers = cached_stage(
+        stage_dir / "mechanism_transfers.json",
+        lambda: map_mechanism_transfers(config, trace, transfer_context, bottlenecks),
+    )
+
+    branches_doc = generate_idea_branches_batched(
+        config,
+        trace,
+        stage_dir,
+        literature_store,
+        base_context,
+        bottlenecks,
+        transfers,
+        params["branches"],
+    )
+
+    screen_context = retrieve_stage_context(
+        store=literature_store,
+        stage="branch_screener",
+        base_context=base_context,
+        extra_context={"branches": summarize_branches(branches_doc)},
+        include_extra_context=False,
+    )
+    screen = cached_stage(
+        stage_dir / f"screen_{params['shortlist']}.json",
+        lambda: screen_idea_branches(config, trace, screen_context, branches_doc, params["shortlist"]),
+    )
+
+    strengthener_context = retrieve_stage_context(
+        store=literature_store,
+        stage="idea_strengthener",
+        base_context=base_context,
+        extra_context={"branches": summarize_branches(branches_doc), "screen_summary": summarize_screen(screen)},
+        include_extra_context=False,
+    )
+    strengthened = cached_stage(
+        stage_dir / "strengthened_ideas.json",
+        lambda: strengthen_ideas(config, trace, strengthener_context, branches_doc, screen),
+    )
+
+    decision_context = retrieve_stage_context(
+        store=literature_store,
+        stage="decision_chair",
+        base_context=base_context,
+        extra_context={
+            "bottleneck_summary": summarize_bottlenecks(bottlenecks),
+            "transfer_summary": summarize_transfers(transfers),
+            "screen_summary": summarize_screen(screen),
+            "strengthened_summary": summarize_strengthened(strengthened),
+        },
+        include_extra_context=False,
+    )
+    final_result = cached_stage(
+        stage_dir / f"decision_{params['final']}.json",
+        lambda: decide_ideas(config, trace, decision_context, bottlenecks, transfers, branches_doc, screen, strengthened, params["final"]),
+    )
 
     result = {
         "parameters": params,
+        "literature_store": {
+            "papers": literature_store.get("paper_count", 0),
+            "passages": literature_store.get("passage_count", 0),
+            "evidence_items": literature_store.get("evidence_count", 0),
+        },
         "bottlenecks": bottlenecks,
         "mechanism_transfers": transfers,
         "branches": branches_doc,
@@ -334,7 +494,7 @@ def run_idea_search(
     return path
 
 
-def load_idea_search_context(project: IdeaProject) -> dict[str, Any]:
+def load_idea_search_base_context(project: IdeaProject) -> dict[str, Any]:
     required = {
         "brief": project.state_dir / "brief.json",
         "claims": project.state_dir / "claims.json",
@@ -348,82 +508,333 @@ def load_idea_search_context(project: IdeaProject) -> dict[str, Any]:
             + ", ".join(missing)
             + ". Run `python3 -m idea_workbench run-deep <project>` first."
         )
-    return compact_idea_search_context({
+    return {
         "brief": read_json(required["brief"], {}),
         "claims": read_json(required["claims"], {}),
         "novelty_matrix": read_json(required["novelty_matrix"], {}),
         "reviewer_report": read_json(required["reviewer_report"], {}),
-        "papers": load_project_papers(project),
         "evidence_qa": read_json(project.evidence_dir / "evidence_status.json", {}),
-    })
+    }
 
 
-def compact_idea_search_context(context: dict[str, Any]) -> dict[str, Any]:
-    papers = [compact_paper(paper) for paper in context.get("papers", [])[:20]]
-    novelty = context.get("novelty_matrix", {})
-    compact_rows = []
-    for row in novelty.get("rows", [])[:10]:
-        compact_rows.append(
+def cached_json_stage(
+    stage_dir: Path,
+    name: str,
+    output_path: Path,
+    input_data: Any,
+    producer,
+    *,
+    accept=None,
+) -> Any:
+    input_hash = json_input_hash(input_data)
+    meta_path = stage_dir / f"{name}.meta.json"
+    if output_path.exists() and meta_path.exists():
+        cached = read_json(output_path, None)
+        meta = read_json(meta_path, {})
+        if meta.get("input_hash") == input_hash and (accept(cached) if accept else cached not in (None, {}, [])):
+            return cached
+
+    result = producer()
+    write_json(output_path, result)
+    write_json(meta_path, {"input_hash": input_hash})
+    return result
+
+
+def json_input_hash(data: Any) -> str:
+    return text_hash(json.dumps(data, ensure_ascii=False, sort_keys=True, default=str))
+
+
+def dict_from_search_result(result: tuple[list[dict[str, Any]], list[dict[str, Any]]]) -> dict[str, Any]:
+    papers, errors = result
+    return {"papers": papers, "errors": errors}
+
+
+def papers_for_cache(papers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    compact: list[dict[str, Any]] = []
+    for paper in papers:
+        if not isinstance(paper, dict):
+            continue
+        compact.append(
             {
-                "claim_id": row.get("claim_id", ""),
-                "claim": row.get("claim", ""),
-                "risk": row.get("risk", ""),
-                "closest_papers": [
-                    {
-                        "title": paper.get("title", ""),
-                        "year": paper.get("year", ""),
-                        "overlap": truncate_text(paper.get("overlap", ""), 500),
-                        "difference": truncate_text(paper.get("difference", ""), 500),
-                        "evidence_strength": paper.get("evidence_strength", ""),
-                    }
-                    for paper in row.get("closest_papers", [])[:3]
-                ],
-                "missing_evidence": row.get("missing_evidence", [])[:5],
-                "positioning": truncate_text(row.get("positioning", ""), 700),
+                "title": paper.get("title", ""),
+                "year": paper.get("year", "") or paper.get("published_date", ""),
+                "url": paper.get("url", ""),
+                "doi": paper.get("doi", ""),
+                "arxiv_id": paper.get("arxiv_id", ""),
+                "pdf_url": paper.get("pdf_url", ""),
+                "local_pdf": paper.get("local_pdf", "") or paper.get("pdf_path", ""),
+                "abstract": truncate_text(paper.get("abstract", ""), 400),
             }
         )
-    review = context.get("reviewer_report", {})
-    evidence = context.get("evidence_qa", {})
+    return compact
+
+
+def evidence_for_cache(evidence: dict[str, Any]) -> dict[str, Any]:
     return {
-        "brief": context.get("brief", {}),
-        "claims": {
-            "claims": context.get("claims", {}).get("claims", [])[:8],
-            "risk_questions": context.get("claims", {}).get("risk_questions", [])[:8],
-        },
-        "novelty_matrix": {
-            "warning": novelty.get("warning", ""),
-            "overall_recommendation": novelty.get("overall_recommendation", ""),
-            "rows": compact_rows,
-        },
-        "reviewer_report": {
-            "summary": truncate_text(review.get("summary", ""), 1000),
-            "score": review.get("score", ""),
-            "recommendation": review.get("recommendation", ""),
-            "strongest_objections": review.get("strongest_objections", [])[:6],
-            "minimum_fixes": review.get("minimum_fixes", [])[:6],
-            "reviewer_likely_prior_work_attack": review.get("reviewer_likely_prior_work_attack", [])[:6],
-            "experiment_concerns": review.get("experiment_concerns", [])[:6],
-            "positioning_advice": truncate_text(review.get("positioning_advice", ""), 1000),
-        },
-        "papers": papers,
-        "evidence_qa": {
-            "status": evidence.get("status", ""),
-            "reason": evidence.get("reason", ""),
-            "selected_papers": [compact_paper(paper) for paper in evidence.get("selected_papers", [])[:8]],
-        },
+        "status": evidence.get("status", ""),
+        "backend": evidence.get("backend", ""),
+        "reason": evidence.get("reason", ""),
+        "item_count": len(evidence.get("items", [])) if isinstance(evidence.get("items", []), list) else 0,
+        "selected_count": len(evidence.get("selected_papers", [])) if isinstance(evidence.get("selected_papers", []), list) else 0,
     }
 
 
-def compact_paper(paper: dict[str, Any]) -> dict[str, Any]:
+def cached_stage(path: Path, producer) -> dict[str, Any]:
+    if path.exists():
+        cached = read_json(path, {})
+        if isinstance(cached, dict) and cached:
+            return cached
+    result = producer()
+    write_json(path, result)
+    return result
+
+
+def clear_stage_cache(stage_dir: Path) -> None:
+    for path in stage_dir.glob("*.json"):
+        if path.is_file():
+            path.unlink()
+
+
+def generate_idea_branches_batched(
+    config: dict[str, Any],
+    trace: TraceLogger,
+    stage_dir: Path,
+    literature_store: dict[str, Any],
+    base_context: dict[str, Any],
+    bottlenecks: dict[str, Any],
+    transfers: dict[str, Any],
+    branch_count: int,
+) -> dict[str, Any]:
+    merged_path = stage_dir / f"branches_{branch_count}.json"
+    if merged_path.exists():
+        cached = read_json(merged_path, {})
+        if isinstance(cached, dict) and cached.get("branches"):
+            return cached
+
+    batch_size = 5
+    batches: list[dict[str, Any]] = []
+    generated_so_far: list[dict[str, Any]] = []
+    track_focuses = [
+        "conservative and diagnostic branches",
+        "method and mechanism-transfer branches",
+        "failure-analysis and benchmark branches",
+        "high-risk and reframing branches",
+    ]
+
+    batch_index = 1
+    while len(generated_so_far) < branch_count:
+        previous_count = len(generated_so_far)
+        target = min(batch_size, branch_count - len(generated_so_far))
+        batch_path = stage_dir / f"branches_{branch_count}_batch_{batch_index}.json"
+        focus = track_focuses[(batch_index - 1) % len(track_focuses)]
+        extra_context = {
+            "bottleneck_summary": summarize_bottlenecks(bottlenecks),
+            "transfer_summary": summarize_transfers(transfers),
+            "branch_batch": {
+                "batch_index": batch_index,
+                "batch_size": target,
+                "target_total_branches": branch_count,
+                "track_focus": focus,
+                "existing_branches": summarize_branch_list(generated_so_far),
+            },
+        }
+        branch_context = retrieve_stage_context(
+            store=literature_store,
+            stage="idea_branch_generator",
+            base_context=base_context,
+            extra_context=extra_context,
+        )
+        batch_doc = cached_stage(
+            batch_path,
+            lambda target=target, branch_context=branch_context: generate_idea_branches(
+                config,
+                trace,
+                branch_context,
+                bottlenecks,
+                transfers,
+                target,
+            ),
+        )
+        batches.append(batch_doc)
+        generated_so_far = merge_branch_batches(batches, branch_count)["branches"]
+        if len(generated_so_far) <= previous_count:
+            break
+        if target <= 0:
+            break
+        batch_index += 1
+        if batch_index > 20:
+            break
+
+    merged = merge_branch_batches(batches, branch_count)
+    write_json(merged_path, merged)
+    return merged
+
+
+def merge_branch_batches(batches: list[dict[str, Any]], branch_count: int) -> dict[str, Any]:
+    branches: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for batch_index, batch in enumerate(batches, start=1):
+        for branch in batch.get("branches", []):
+            if not isinstance(branch, dict):
+                continue
+            key = branch_key(branch)
+            if key in seen:
+                continue
+            seen.add(key)
+            item = dict(branch)
+            item["source_batch"] = batch_index
+            branches.append(item)
+            if len(branches) >= branch_count:
+                break
+        if len(branches) >= branch_count:
+            break
+    for index, branch in enumerate(branches, start=1):
+        branch["id"] = f"I{index}"
+    return {"branches": branches}
+
+
+def branch_key(branch: dict[str, Any]) -> str:
+    name = " ".join(str(branch.get("name") or "").lower().split())
+    core = " ".join(str(branch.get("core_idea") or "").lower().split())
+    return name or core[:120] or str(branch.get("id") or "")
+
+
+def summarize_branches(branches_doc: dict[str, Any]) -> list[dict[str, Any]]:
+    return summarize_branch_list(branches_doc.get("branches", []))
+
+
+def summarize_branch_list(branches: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    summaries: list[dict[str, Any]] = []
+    for branch in branches[:30]:
+        if not isinstance(branch, dict):
+            continue
+        summaries.append(
+            {
+                "id": branch.get("id", ""),
+                "track": branch.get("track", ""),
+                "name": branch.get("name", ""),
+                "core_idea": truncate_text(branch.get("core_idea", ""), 350),
+                "closest_prior_work_risk": truncate_text(branch.get("closest_prior_work_risk", ""), 300),
+            }
+        )
+    return summaries
+
+
+def compact_branches_for_prompt(branches_doc: dict[str, Any], *, limit: int = 20) -> dict[str, Any]:
+    branches: list[dict[str, Any]] = []
+    for branch in branches_doc.get("branches", [])[:limit]:
+        if not isinstance(branch, dict):
+            continue
+        branches.append(
+            {
+                "id": branch.get("id", ""),
+                "source_batch": branch.get("source_batch", ""),
+                "track": branch.get("track", ""),
+                "name": branch.get("name", ""),
+                "core_idea": truncate_text(branch.get("core_idea", ""), 260),
+                "mechanism": truncate_text(branch.get("mechanism", ""), 240),
+                "novelty_hypothesis": truncate_text(branch.get("novelty_hypothesis", ""), 220),
+                "minimum_experiment": truncate_text(branch.get("minimum_experiment", ""), 240),
+                "falsifiable_prediction": truncate_text(branch.get("falsifiable_prediction", ""), 180),
+                "closest_prior_work_risk": truncate_text(branch.get("closest_prior_work_risk", ""), 220),
+                "feasibility_risk": truncate_text(branch.get("feasibility_risk", ""), 160),
+                "evidence_needed": [truncate_text(item, 120) for item in branch.get("evidence_needed", [])[:3]],
+            }
+        )
+    return {"branches": branches}
+
+
+def compact_screen_for_prompt(screen: dict[str, Any]) -> dict[str, Any]:
     return {
-        "title": paper.get("title", ""),
-        "year": paper.get("year", "") or str(paper.get("published_date", ""))[:4],
-        "source": paper.get("source", ""),
-        "url": paper.get("url", ""),
-        "pdf_url": paper.get("pdf_url", ""),
-        "local_pdf": paper.get("local_pdf", ""),
-        "abstract": truncate_text(paper.get("abstract", ""), 700),
+        "shortlist": [
+            {
+                "branch_id": item.get("branch_id", ""),
+                "decision": item.get("decision", ""),
+                "score": item.get("score", ""),
+                "rationale": truncate_text(item.get("rationale", ""), 360),
+                "fatal_objections": [truncate_text(objection, 220) for objection in item.get("fatal_objections", [])[:4]],
+                "salvage_path": truncate_text(item.get("salvage_path", ""), 320),
+            }
+            for item in screen.get("shortlist", [])[:20]
+            if isinstance(item, dict)
+        ],
+        "discarded": [truncate_text(item, 260) for item in screen.get("discarded", [])[:12]],
     }
+
+
+def compact_strengthened_for_prompt(strengthened: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "ideas": [
+            {
+                "branch_id": item.get("branch_id", ""),
+                "name": item.get("name", ""),
+                "technical_move": truncate_text(item.get("technical_move", ""), 420),
+                "novelty_boundary": truncate_text(item.get("novelty_boundary", ""), 380),
+                "minimum_experiment": truncate_text(item.get("minimum_experiment", ""), 420),
+                "main_risk": truncate_text(item.get("main_risk", ""), 320),
+                "fixes": [truncate_text(fix, 240) for fix in item.get("fixes", [])[:4]],
+            }
+            for item in strengthened.get("ideas", [])[:20]
+            if isinstance(item, dict)
+        ]
+    }
+
+
+def summarize_bottlenecks(bottlenecks: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": item.get("id", ""),
+            "description": truncate_text(item.get("description", ""), 300),
+            "failure_mode": truncate_text(item.get("failure_mode", ""), 260),
+            "evidence_signal": truncate_text(item.get("evidence_signal", ""), 220),
+        }
+        for item in bottlenecks.get("bottlenecks", [])[:10]
+        if isinstance(item, dict)
+    ]
+
+
+def summarize_transfers(transfers: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": item.get("id", ""),
+            "source_field": item.get("source_field", ""),
+            "source_mechanism": truncate_text(item.get("source_mechanism", ""), 260),
+            "target_bottleneck": truncate_text(item.get("target_bottleneck", ""), 180),
+            "main_risk": truncate_text(item.get("main_risk", ""), 220),
+        }
+        for item in transfers.get("transfers", [])[:10]
+        if isinstance(item, dict)
+    ]
+
+
+def summarize_screen(screen: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "shortlist": [
+            {
+                "branch_id": item.get("branch_id", ""),
+                "decision": item.get("decision", ""),
+                "score": item.get("score", ""),
+                "rationale": truncate_text(item.get("rationale", ""), 260),
+                "fatal_objections": item.get("fatal_objections", [])[:3],
+            }
+            for item in screen.get("shortlist", [])[:12]
+            if isinstance(item, dict)
+        ],
+        "discarded": screen.get("discarded", [])[:8],
+    }
+
+
+def summarize_strengthened(strengthened: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "branch_id": item.get("branch_id", ""),
+            "name": item.get("name", ""),
+            "technical_move": truncate_text(item.get("technical_move", ""), 280),
+            "main_risk": truncate_text(item.get("main_risk", ""), 220),
+        }
+        for item in strengthened.get("ideas", [])[:12]
+        if isinstance(item, dict)
+    ]
 
 
 def truncate_text(value: Any, limit: int) -> str:
@@ -507,7 +918,7 @@ def screen_idea_branches(
                 "schema": BRANCH_SCREEN_SCHEMA,
                 "shortlist_count": shortlist_count,
                 "context": context,
-                "branches": branches_doc,
+                "branches": compact_branches_for_prompt(branches_doc),
             },
         ),
         trace=trace,
@@ -533,8 +944,8 @@ def strengthen_ideas(
             {
                 "schema": STRENGTHENED_IDEAS_SCHEMA,
                 "context": context,
-                "branches": branches_doc,
-                "screen": screen,
+                "branches": compact_branches_for_prompt(branches_doc),
+                "screen": compact_screen_for_prompt(screen),
             },
         ),
         trace=trace,
@@ -565,11 +976,11 @@ def decide_ideas(
                 "schema": IDEA_SEARCH_RESULT_SCHEMA,
                 "final_count": final_count,
                 "context": context,
-                "bottlenecks": bottlenecks,
-                "mechanism_transfers": transfers,
-                "branches": branches_doc,
-                "screen": screen,
-                "strengthened_ideas": strengthened,
+                "bottlenecks": {"bottlenecks": summarize_bottlenecks(bottlenecks)},
+                "mechanism_transfers": {"transfers": summarize_transfers(transfers)},
+                "branches": compact_branches_for_prompt(branches_doc),
+                "screen": compact_screen_for_prompt(screen),
+                "strengthened_ideas": compact_strengthened_for_prompt(strengthened),
             },
         ),
         trace=trace,
@@ -629,6 +1040,7 @@ def plan_queries(config: dict[str, Any], trace: TraceLogger, seed_text: str, bri
 def build_llm_matrix(
     config: dict[str, Any],
     trace: TraceLogger,
+    project: IdeaProject,
     brief: dict[str, Any],
     claims: dict[str, Any],
     papers: list[dict[str, Any]],
@@ -638,6 +1050,82 @@ def build_llm_matrix(
         fallback = build_novelty_matrix(claims_to_decomposition(brief, claims), [], config)
         fallback["overall_recommendation"] = "proceed_with_caution"
         return fallback
+
+    stage_dir = project.state_dir / "run_deep_stages"
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    literature_store = build_or_load_literature_store(
+        project,
+        papers=papers,
+        brief=brief,
+        claims=claims,
+        novelty_matrix={},
+        reviewer_report={},
+        evidence_qa=evidence or {},
+    )
+    claim_items = [item for item in claims.get("claims", []) if isinstance(item, dict)]
+    if not claim_items:
+        claim_items = [{"id": "C1", "claim": brief.get("problem_statement", "") or brief.get("topic", "")}]
+
+    batch_size = max(1, int(config.get("novelty_matrix_claim_batch_size", 1)))
+    batches: list[dict[str, Any]] = []
+    for batch_index, claim_batch in enumerate(chunk_list(claim_items, batch_size), start=1):
+        batch_path = stage_dir / f"novelty_matrix_v2_batch_{batch_index}.json"
+        batch = cached_json_stage(
+            stage_dir,
+            f"novelty_matrix_v2_batch_{batch_index}",
+            batch_path,
+            {
+                "stage_version": 2,
+                "brief": brief,
+                "claims": claims,
+                "claim_batch": claim_batch,
+                "papers": papers_for_cache(papers),
+                "evidence": evidence_for_cache(evidence or {}),
+            },
+            lambda claim_batch=claim_batch, batch_index=batch_index: build_llm_matrix_batch(
+                config,
+                trace,
+                brief,
+                claims,
+                literature_store,
+                claim_batch,
+                batch_index,
+                evidence or {},
+            ),
+            accept=lambda value: isinstance(value, dict) and bool(value.get("rows")),
+        )
+        batches.append(batch)
+
+    matrix = merge_novelty_matrix_batches(batches)
+    write_json(stage_dir / "novelty_matrix_v2_merged.json", matrix)
+    return matrix
+
+
+def build_llm_matrix_batch(
+    config: dict[str, Any],
+    trace: TraceLogger,
+    brief: dict[str, Any],
+    claims: dict[str, Any],
+    literature_store: dict[str, Any],
+    claim_batch: list[dict[str, Any]],
+    batch_index: int,
+    evidence: dict[str, Any],
+) -> dict[str, Any]:
+    base_context = {
+        "brief": brief,
+        "claims": claims,
+        "novelty_matrix": {},
+        "reviewer_report": {},
+    }
+    evidence_contexts = [
+        retrieve_novelty_claim_context(
+            store=literature_store,
+            base_context=base_context,
+            claim=claim,
+            evidence_qa=evidence,
+        )
+        for claim in claim_batch
+    ]
     return call_json(
         config,
         "strong",
@@ -645,50 +1133,243 @@ def build_llm_matrix(
             "novelty_matrix_builder",
             {
                 "schema": NOVELTY_SCHEMA,
+                "batch_index": batch_index,
                 "brief": brief,
-                "claims": claims,
-                "papers": papers[:60],
-                "evidence_qa": evidence or {},
+                "claims": {
+                    "claims": claim_batch,
+                    "risk_questions": claims.get("risk_questions", [])[:8],
+                },
+                "evidence_contexts": evidence_contexts,
+                "evidence_qa": {
+                    "status": evidence.get("status", ""),
+                    "reason": evidence.get("reason", ""),
+                },
             },
         ),
         trace=trace,
-        stage="novelty_matrix_builder",
+        stage=f"novelty_matrix_builder_batch_{batch_index}",
         validator=normalize_matrix,
         temperature=0.1,
+        timeout=float(config.get("novelty_matrix_timeout_sec", config.get("llm_timeout_sec", 240))),
     )
 
 
+def merge_novelty_matrix_batches(batches: list[dict[str, Any]]) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    seen_claims: set[str] = set()
+    recommendations: list[str] = []
+    warnings: list[str] = []
+    for batch in batches:
+        warning = str(batch.get("warning", "")).strip()
+        if warning and warning not in warnings:
+            warnings.append(warning)
+        recommendation = str(batch.get("overall_recommendation", "")).strip()
+        if recommendation:
+            recommendations.append(recommendation)
+        for row in batch.get("rows", []):
+            if not isinstance(row, dict):
+                continue
+            claim_id = str(row.get("claim_id", "")).strip()
+            key = claim_id or str(row.get("claim", "")).strip().lower()
+            if key and key in seen_claims:
+                continue
+            if key:
+                seen_claims.add(key)
+            rows.append(row)
+    return {
+        "warning": warnings[0] if warnings else "Batched evidence-grounded novelty matrix; this is not a novelty proof.",
+        "rows": rows,
+        "overall_recommendation": strongest_recommendation(recommendations),
+    }
+
+
+def strongest_recommendation(values: list[str]) -> str:
+    order = {
+        "proceed": 0,
+        "proceed_with_caution": 1,
+        "pivot": 2,
+        "abandon": 3,
+    }
+    if not values:
+        return "proceed_with_caution"
+    return max(values, key=lambda item: order.get(item, 1))
+
+
+def chunk_list(items: list[dict[str, Any]], size: int) -> list[list[dict[str, Any]]]:
+    return [items[index : index + size] for index in range(0, len(items), size)]
+
+
+def compact_brief_for_run_deep(brief: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "topic": brief.get("topic", ""),
+        "problem_statement": truncate_text(brief.get("problem_statement", ""), 1200),
+        "domain": brief.get("domain", [])[:10],
+        "known_context": brief.get("known_context", [])[:10],
+        "constraints": brief.get("constraints", [])[:8],
+        "success_criteria": brief.get("success_criteria", [])[:8],
+        "uncertainties": brief.get("uncertainties", [])[:8],
+    }
+
+
+def compact_claims_for_review(claims: dict[str, Any]) -> dict[str, Any]:
+    compact_claims = []
+    for claim in claims.get("claims", [])[:16]:
+        if not isinstance(claim, dict):
+            continue
+        compact_claims.append(
+            {
+                "id": claim.get("id", ""),
+                "type": claim.get("type", ""),
+                "claim": truncate_text(claim.get("claim", ""), 700),
+                "mechanism": truncate_text(claim.get("mechanism", ""), 500),
+                "task_context": truncate_text(claim.get("task_context", ""), 400),
+                "risk_if_false": truncate_text(claim.get("risk_if_false", ""), 500),
+                "equivalent_terms": claim.get("equivalent_terms", [])[:8],
+                "search_priority": claim.get("search_priority", ""),
+            }
+        )
+    return {
+        "claims": compact_claims,
+        "risk_questions": claims.get("risk_questions", [])[:12],
+    }
+
+
+def compact_matrix_for_review(matrix: dict[str, Any], *, closest_limit: int = 4) -> dict[str, Any]:
+    rows = []
+    for row in matrix.get("rows", [])[:16]:
+        if not isinstance(row, dict):
+            continue
+        rows.append(
+            {
+                "claim_id": row.get("claim_id", ""),
+                "claim": truncate_text(row.get("claim", ""), 700),
+                "risk": row.get("risk", ""),
+                "closest_papers": [
+                    {
+                        "title": paper.get("title", ""),
+                        "year": paper.get("year", ""),
+                        "url": paper.get("url", ""),
+                        "overlap": truncate_text(paper.get("overlap", ""), 450),
+                        "difference": truncate_text(paper.get("difference", ""), 450),
+                        "evidence_strength": paper.get("evidence_strength", ""),
+                    }
+                    for paper in row.get("closest_papers", [])[:closest_limit]
+                    if isinstance(paper, dict)
+                ],
+                "missing_evidence": [truncate_text(item, 350) for item in row.get("missing_evidence", [])[:6]],
+                "positioning": truncate_text(row.get("positioning", ""), 700),
+            }
+        )
+    return {
+        "warning": matrix.get("warning", ""),
+        "overall_recommendation": matrix.get("overall_recommendation", ""),
+        "rows": rows,
+    }
+
+
+def compact_matrix_for_refinement(matrix: dict[str, Any]) -> dict[str, Any]:
+    return compact_matrix_for_review(matrix, closest_limit=3)
+
+
+def compact_review_for_refinement(review: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "summary": truncate_text(review.get("summary", ""), 1000),
+        "score": review.get("score", ""),
+        "recommendation": review.get("recommendation", ""),
+        "strongest_objections": [truncate_text(item, 450) for item in review.get("strongest_objections", [])[:8]],
+        "minimum_fixes": [truncate_text(item, 450) for item in review.get("minimum_fixes", [])[:8]],
+        "reviewer_likely_prior_work_attack": [
+            truncate_text(item, 450) for item in review.get("reviewer_likely_prior_work_attack", [])[:8]
+        ],
+        "experiment_concerns": [truncate_text(item, 450) for item in review.get("experiment_concerns", [])[:8]],
+        "positioning_advice": truncate_text(review.get("positioning_advice", ""), 1000),
+    }
+
+
+def compact_ideas_for_experiment(ideas: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    compact = []
+    idea_items = [idea for idea in ideas if isinstance(idea, dict)]
+    for idea in sorted(idea_items, key=lambda item: item.get("rank", 999))[:8]:
+        compact.append(
+            {
+                "rank": idea.get("rank", ""),
+                "name": idea.get("name", ""),
+                "research_question": truncate_text(idea.get("research_question", ""), 600),
+                "method": [truncate_text(item, 320) for item in idea.get("method", [])[:4]],
+                "novelty_lever": truncate_text(idea.get("novelty_lever", ""), 500),
+                "minimum_experiment": truncate_text(idea.get("minimum_experiment", ""), 600),
+                "main_risk": truncate_text(idea.get("main_risk", ""), 500),
+                "expected_contribution": idea.get("expected_contribution", ""),
+            }
+        )
+    return compact
+
+
 def review_project(config: dict[str, Any], trace: TraceLogger, brief: dict[str, Any], claims: dict[str, Any], matrix: dict[str, Any]) -> dict[str, Any]:
+    payload = {
+        "schema": REVIEW_SCHEMA,
+        "brief": compact_brief_for_run_deep(brief),
+        "claims": compact_claims_for_review(claims),
+        "novelty_matrix": compact_matrix_for_review(matrix),
+        "compression_note": (
+            "Inputs are compressed from the full run-deep artifacts. Preserve the same adversarial review standard, "
+            "but avoid treating omitted details as absent evidence."
+        ),
+    }
     return call_json(
         config,
         "frontier",
-        prompt_messages("adversarial_reviewer", {"schema": REVIEW_SCHEMA, "brief": brief, "claims": claims, "novelty_matrix": matrix}),
+        prompt_messages("adversarial_reviewer", payload),
         trace=trace,
         stage="adversarial_reviewer",
         validator=normalize_review,
         temperature=0.1,
+        timeout=float(config.get("review_timeout_sec", config.get("llm_timeout_sec", 240))),
     )
 
 
 def refine_with_llm(config: dict[str, Any], trace: TraceLogger, brief: dict[str, Any], matrix: dict[str, Any], review: dict[str, Any]) -> list[dict[str, Any]]:
+    payload = {
+        "schema": IDEA_SCHEMA,
+        "brief": compact_brief_for_run_deep(brief),
+        "novelty_matrix": compact_matrix_for_refinement(matrix),
+        "review": compact_review_for_refinement(review),
+        "compression_note": (
+            "The novelty matrix and review are compressed evidence summaries. Generate ideas that answer the strongest "
+            "objections and explicitly preserve the novelty boundary."
+        ),
+    }
     return call_json(
         config,
         "strong",
-        prompt_messages("idea_refiner", {"schema": IDEA_SCHEMA, "brief": brief, "novelty_matrix": matrix, "review": review}),
+        prompt_messages("idea_refiner", payload),
         trace=trace,
         stage="idea_refiner",
         validator=normalize_ideas,
+        timeout=float(config.get("idea_refiner_timeout_sec", config.get("llm_timeout_sec", 240))),
     )
 
 
 def plan_experiment_with_llm(config: dict[str, Any], trace: TraceLogger, brief: dict[str, Any], matrix: dict[str, Any], review: dict[str, Any], ideas: list[dict[str, Any]]) -> dict[str, Any]:
+    payload = {
+        "schema": EXPERIMENT_SCHEMA,
+        "brief": compact_brief_for_run_deep(brief),
+        "novelty_matrix": compact_matrix_for_refinement(matrix),
+        "review": compact_review_for_refinement(review),
+        "ideas": compact_ideas_for_experiment(ideas),
+        "compression_note": (
+            "Inputs are compressed from run-deep artifacts. Design experiments against the retained claim risks, "
+            "closest prior-work attacks, and reviewer concerns."
+        ),
+    }
     return call_json(
         config,
         "standard",
-        prompt_messages("experiment_planner", {"schema": EXPERIMENT_SCHEMA, "brief": brief, "novelty_matrix": matrix, "review": review, "ideas": ideas}),
+        prompt_messages("experiment_planner", payload),
         trace=trace,
         stage="experiment_planner",
         validator=normalize_experiment,
+        timeout=float(config.get("experiment_timeout_sec", config.get("llm_timeout_sec", 240))),
     )
 
 
@@ -737,22 +1418,81 @@ def write_dry_run(project: IdeaProject, config: dict[str, Any], seed_text: str) 
     return path
 
 
-def write_idea_search_dry_run(project: IdeaProject, context: dict[str, Any], params: dict[str, int]) -> Path:
+def write_idea_search_dry_run(
+    project: IdeaProject,
+    base_context: dict[str, Any],
+    literature_store: dict[str, Any],
+    params: dict[str, int],
+) -> Path:
     trace = TraceLogger(project.traces_dir)
+    placeholder_bottlenecks = "<bottleneck_extractor output>"
+    placeholder_transfers = "<mechanism_transfer_mapper output>"
+    placeholder_branches = "<batched idea_branch_generator output>"
+    placeholder_screen = "<branch_screener output>"
+    placeholder_strengthened = "<idea_strengthener output>"
+    bottleneck_context = retrieve_stage_context(store=literature_store, stage="bottleneck_extractor", base_context=base_context)
+    transfer_context = retrieve_stage_context(
+        store=literature_store,
+        stage="mechanism_transfer_mapper",
+        base_context=base_context,
+        extra_context={"bottleneck_summary": placeholder_bottlenecks},
+    )
+    branch_context = retrieve_stage_context(
+        store=literature_store,
+        stage="idea_branch_generator",
+        base_context=base_context,
+        extra_context={
+            "bottleneck_summary": placeholder_bottlenecks,
+            "transfer_summary": placeholder_transfers,
+            "branch_batch": {
+                "batch_index": 1,
+                "batch_size": min(5, params["branches"]),
+                "target_total_branches": params["branches"],
+                "track_focus": "conservative and diagnostic branches",
+                "existing_branches": [],
+            },
+        },
+    )
+    screen_context = retrieve_stage_context(
+        store=literature_store,
+        stage="branch_screener",
+        base_context=base_context,
+        extra_context={"branches": placeholder_branches},
+        include_extra_context=False,
+    )
+    strengthener_context = retrieve_stage_context(
+        store=literature_store,
+        stage="idea_strengthener",
+        base_context=base_context,
+        extra_context={"branches": placeholder_branches, "screen_summary": placeholder_screen},
+        include_extra_context=False,
+    )
+    decision_context = retrieve_stage_context(
+        store=literature_store,
+        stage="decision_chair",
+        base_context=base_context,
+        extra_context={
+            "bottleneck_summary": placeholder_bottlenecks,
+            "transfer_summary": placeholder_transfers,
+            "screen_summary": placeholder_screen,
+            "strengthened_summary": placeholder_strengthened,
+        },
+        include_extra_context=False,
+    )
     payloads = {
-        "bottleneck_extractor": prompt_messages("bottleneck_extractor", {"schema": BOTTLENECK_SCHEMA, "context": context}),
+        "bottleneck_extractor": prompt_messages("bottleneck_extractor", {"schema": BOTTLENECK_SCHEMA, "context": bottleneck_context}),
         "mechanism_transfer_mapper": prompt_messages(
             "mechanism_transfer_mapper",
-            {"schema": MECHANISM_TRANSFER_SCHEMA, "context": context, "bottlenecks": "<bottleneck_extractor output>"},
+            {"schema": MECHANISM_TRANSFER_SCHEMA, "context": transfer_context, "bottlenecks": placeholder_bottlenecks},
         ),
-        "idea_branch_generator": prompt_messages(
+        "idea_branch_generator_batch_1": prompt_messages(
             "idea_branch_generator",
             {
                 "schema": IDEA_BRANCH_SCHEMA,
-                "branch_count": params["branches"],
-                "context": context,
-                "bottlenecks": "<bottleneck_extractor output>",
-                "mechanism_transfers": "<mechanism_transfer_mapper output>",
+                "branch_count": min(5, params["branches"]),
+                "context": branch_context,
+                "bottlenecks": placeholder_bottlenecks,
+                "mechanism_transfers": placeholder_transfers,
             },
         ),
         "branch_screener": prompt_messages(
@@ -760,17 +1500,17 @@ def write_idea_search_dry_run(project: IdeaProject, context: dict[str, Any], par
             {
                 "schema": BRANCH_SCREEN_SCHEMA,
                 "shortlist_count": params["shortlist"],
-                "context": context,
-                "branches": "<idea_branch_generator output>",
+                "context": screen_context,
+                "branches": placeholder_branches,
             },
         ),
         "idea_strengthener": prompt_messages(
             "idea_strengthener",
             {
                 "schema": STRENGTHENED_IDEAS_SCHEMA,
-                "context": context,
-                "branches": "<idea_branch_generator output>",
-                "screen": "<branch_screener output>",
+                "context": strengthener_context,
+                "branches": placeholder_branches,
+                "screen": placeholder_screen,
             },
         ),
         "decision_chair": prompt_messages(
@@ -778,12 +1518,12 @@ def write_idea_search_dry_run(project: IdeaProject, context: dict[str, Any], par
             {
                 "schema": IDEA_SEARCH_RESULT_SCHEMA,
                 "final_count": params["final"],
-                "context": context,
-                "bottlenecks": "<bottleneck_extractor output>",
-                "mechanism_transfers": "<mechanism_transfer_mapper output>",
-                "branches": "<idea_branch_generator output>",
-                "screen": "<branch_screener output>",
-                "strengthened_ideas": "<idea_strengthener output>",
+                "context": decision_context,
+                "bottlenecks": placeholder_bottlenecks,
+                "mechanism_transfers": placeholder_transfers,
+                "branches": placeholder_branches,
+                "screen": placeholder_screen,
+                "strengthened_ideas": placeholder_strengthened,
             },
         ),
     }
@@ -908,12 +1648,16 @@ def render_llm_experiment(plan: dict[str, Any]) -> str:
 def render_idea_search(result: dict[str, Any]) -> str:
     final_result = result.get("final", {})
     params = result.get("parameters", {})
+    store = result.get("literature_store", {})
     lines = [
         "# Idea Search Report",
         "",
         f"- Branches: {params.get('branches', '')}",
         f"- Shortlist: {params.get('shortlist', '')}",
         f"- Final: {params.get('final', '')}",
+        f"- Literature store papers: {store.get('papers', '')}",
+        f"- Literature store PDF passages: {store.get('passages', '')}",
+        f"- Literature store evidence items: {store.get('evidence_items', '')}",
         "",
         "## Summary",
         "",

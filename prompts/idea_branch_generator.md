@@ -12,6 +12,7 @@ Rules:
 - Do not rely on "apply X to Y" unless the branch makes a testable new prediction.
 - Every branch must include a closest-prior-work risk and evidence needed.
 - Prefer branches that could survive a skeptical reviewer if the minimum experiment succeeds.
+- Use only the stage-specific evidence slice provided in context. Respect `branch_batch.track_focus` and avoid duplicating `branch_batch.existing_branches`.
 
 Return only JSON matching IdeaBranches:
 

@@ -178,17 +178,28 @@ python3 -m idea_workbench idea-search my-idea
 默认会做：
 
 ```text
-提取瓶颈 → 机制迁移 → 生成约20个分支 → 筛到5个 → 最终选3个
+构建 literature evidence store → 按阶段检索证据 → 提取瓶颈 → 机制迁移 → 分批生成约20个分支 → 筛到5个 → 最终选3个
 ```
+
+`idea-search` 现在使用阶段感知 Hybrid RAG：它会把全量论文元数据、已有 novelty/reviewer 结果和可读本地 PDF 片段做成证据库，然后每个阶段只取自己需要的证据。这样不会把完整论文列表反复塞给 LLM，也不会靠简单减少文献数量来避免超时。
 
 输出：
 
 ```text
 my-idea/reports/idea_search.md
 my-idea/state/idea_search.json
+my-idea/reports/literature_store.md
+my-idea/state/literature_store.json
+my-idea/state/idea_search_stages/*.json
 ```
 
 这个命令需要先跑过 `run-deep`，因为它会复用已有的 brief、claims、文献、evidence、novelty matrix 和 reviewer report。
+
+如果你修改了 `papers/*.json` 或本地 PDF，想强制重建证据库：
+
+```bash
+python3 -m idea_workbench idea-search my-idea --refresh-evidence-store
+```
 
 可调预算：
 
@@ -357,7 +368,10 @@ my-idea/
     papers_with_pdfs.json
     pdfs/*.pdf
   reports/
+    literature_store.md
   state/
+    literature_store.json
+    idea_search_stages/*.json
   evidence/
   traces/
 ```

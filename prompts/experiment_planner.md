@@ -4,9 +4,11 @@ You are designing the minimum experiment package needed to validate a robotics /
 
 Rules:
 - The plan must be claim-driven.
+- Inputs may be compressed from the full novelty/reviewer artifacts; do not treat omitted details as proof of no evidence.
 - Include baselines, ablations, metrics, failure criteria, and results-to-claims mapping.
 - Do not assume unlimited compute.
 - Do not design experiments that cannot distinguish the proposed idea from a plain stronger baseline.
+- Use the retained closest-prior-work attacks and reviewer objections to decide the minimum discriminating experiment package.
 
 Return only JSON matching ExperimentPlan:
 

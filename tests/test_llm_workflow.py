@@ -159,6 +159,12 @@ model_tiers:
             evidence_report = (project / "reports" / "evidence_qa.md").read_text(encoding="utf-8")
             self.assertIn("Manual Related Work on Tactile World Models", evidence_report)
             self.assertIn(str(pdf_dir / "manual.pdf"), evidence_report)
+            self.assertTrue((project / "state" / "run_deep_stages" / "novelty_matrix_v2_batch_1.json").exists())
+            novelty_prompts = list((project / "traces").glob("novelty_matrix_builder_batch_*.prompt.md"))
+            self.assertTrue(novelty_prompts)
+            prompt_text = novelty_prompts[0].read_text(encoding="utf-8")
+            self.assertIn("evidence_contexts", prompt_text)
+            self.assertNotIn('"papers": [', prompt_text)
 
     def test_idea_search_mock_end_to_end(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -173,6 +179,10 @@ model_tiers:
             self.assertIn("Idea Search Report", report)
             self.assertIn("Controllability Probe Suite", report)
             self.assertEqual(state["parameters"]["branches"], 8)
+            self.assertIn("literature_store", state)
+            self.assertTrue((project / "state" / "literature_store.json").exists())
+            self.assertTrue((project / "reports" / "literature_store.md").exists())
+            self.assertTrue((project / "state" / "idea_search_stages" / "branches_8_batch_1.json").exists())
             self.assertTrue(state["final"]["final_ideas"])
 
     def test_idea_search_dry_run_writes_prompts(self) -> None:
@@ -195,7 +205,12 @@ model_tiers:
             )
 
             self.assertTrue((project / "reports" / "idea_search_dry_run.md").exists())
-            self.assertTrue((project / "traces" / "idea_search_dry_run_prompts.json").exists())
+            prompt_path = project / "traces" / "idea_search_dry_run_prompts.json"
+            self.assertTrue(prompt_path.exists())
+            prompts = prompt_path.read_text(encoding="utf-8")
+            self.assertIn("evidence_items", prompts)
+            self.assertIn("paper_passages", prompts)
+            self.assertNotIn('"papers": [', prompts)
 
     def test_idea_search_requires_run_deep_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

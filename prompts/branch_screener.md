@@ -12,6 +12,7 @@ Rules:
 - Discard only for clear fatal overlap, incoherent mechanism, or non-discriminative experiment.
 - Prefer pivots over discard when a branch has a salvageable core.
 - Keep the requested shortlist size unless too few branches are credible.
+- Use the stage-specific evidence items and PDF passages as the main basis for prior-work and fatal-overlap judgments.
 
 Return only JSON matching BranchScreen:
 

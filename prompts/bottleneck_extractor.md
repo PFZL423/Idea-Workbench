@@ -12,6 +12,7 @@ Rules:
 - Do not praise the seed idea.
 - Separate "missing evidence" from "negative evidence".
 - A useful bottleneck should imply at least one falsifiable experiment.
+- Use the provided stage-specific evidence items and PDF passages. Prefer concrete paper/page evidence over generic background.
 
 Return only JSON matching BottleneckAnalysis:
 

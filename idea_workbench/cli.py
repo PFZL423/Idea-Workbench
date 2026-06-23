@@ -127,6 +127,7 @@ def build_parser() -> argparse.ArgumentParser:
     idea_search.add_argument("--shortlist", type=int, default=5, help="number of branches to keep for strengthening")
     idea_search.add_argument("--final", type=int, default=3, help="number of final ideas to select")
     idea_search.add_argument("--dry-run", action="store_true", help="write idea-search prompts without calling the LLM")
+    idea_search.add_argument("--refresh-evidence-store", action="store_true", help="rebuild the stage-aware literature evidence store")
     idea_search.set_defaults(func=cmd_idea_search)
 
     run_deep_parser = sub.add_parser("run-deep", help="run the LLM-first deep research idea workflow")
@@ -272,6 +273,7 @@ def cmd_idea_search(args: argparse.Namespace) -> int:
         shortlist=args.shortlist,
         final=args.final,
         dry_run=args.dry_run,
+        refresh_evidence_store=args.refresh_evidence_store,
     )
     print(f"wrote {path}")
     return 0

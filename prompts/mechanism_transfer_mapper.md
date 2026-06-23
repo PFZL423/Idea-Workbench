@@ -11,6 +11,7 @@ Rules:
 - Do not use a source field unless the mechanism addresses a target bottleneck.
 - Include why the transfer is non-trivial.
 - Include one clear risk for each transfer.
+- Use the stage-specific evidence items and PDF passages to ground transfers in actual mechanisms, not loose keyword similarity.
 
 Return only JSON matching MechanismTransferMap:
 

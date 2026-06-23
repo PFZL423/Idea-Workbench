@@ -12,6 +12,7 @@ Rules:
 - Do not make claims broader than the minimum experiment can support.
 - Preserve falsifiability.
 - If a branch is weak, strengthen by narrowing or pivoting, not by adding complexity.
+- Use the stage-specific evidence slice to address objections and sharpen the minimum experiment.
 
 Return only JSON matching StrengthenedIdeas:
 
