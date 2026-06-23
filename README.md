@@ -7,7 +7,7 @@
 第一次使用时，先按这条主线走：
 
 ```text
-写 seed.md → 配好 API key → doctor 检查 → run-deep 生成 evidence pack → research 生成最终 proposal
+写 seed.md → 配好 API key → doctor 检查 → 可选 ingest 文献 → run-deep 生成 evidence pack → research 生成最终 proposal
 ```
 
 `idea-search` 是可选的扩展工具：当你想主动生成很多分支、再筛选少数方向时再跑它。只想得到一份主 research proposal 时，通常先跑 `run-deep`，再跑 `research` 就够了。
@@ -50,13 +50,46 @@ my-idea/seed.md
 - 担心已有工作覆盖的部分
 - 希望工具重点查的点
 
-### 3. 可选：导入你已经知道的相关文献
+### 3. 可选：低门槛导入你已经知道的相关文献
 
 这一步不是必需的。你没有现成论文时，可以先跳过，`run-deep` 会根据 seed 自动检索。
 
 如果你已经知道几篇关键论文，建议手动导入；这通常会提高 novelty 检查和 reviewer critique 的质量。
 
-推荐把 PDF 放到：
+最简单方式：把文件丢进 inbox。
+
+```text
+my-idea/papers/inbox/
+```
+
+支持：
+
+```text
+*.pdf          # 本地 PDF，标题先从文件名生成
+*.bib          # BibTeX，解析 title/year/authors/url/doi
+arxiv.txt      # 一行一个 arXiv ID / URL
+doi.txt        # 一行一个 DOI
+urls.txt       # 一行一个论文 URL
+```
+
+然后运行：
+
+```bash
+python3 -m idea_workbench ingest my-idea
+```
+
+它会生成：
+
+```text
+my-idea/papers/imported_papers.json
+my-idea/reports/details/ingest.md
+```
+
+这些导入的论文会和 `run-deep` 自动搜索到的论文混在同一个 paper pool / literature store 里。后续 RAG 检索会统一使用它们，但仍保留 `source` 字段，例如 `manual_pdf`、`manual_bibtex`、`manual_arxiv`、`arxiv`。
+
+有本地 PDF 的论文会保留 `local_pdf`，后续 Evidence QA 和 literature store 可以抽取接近原文的 passage；只有 DOI / URL / metadata 的论文不能保证读到全文。
+
+如果你想手写更精确的元数据，也可以继续使用 `manual_papers.json`。推荐把 PDF 放到：
 
 ```text
 my-idea/papers/pdfs/
@@ -174,6 +207,7 @@ python3 -m idea_workbench run-deep my-idea
 
 - `seed.md`
 - `papers/manual_papers.json`
+- `papers/imported_papers.json`
 - 已有 `local_pdf`
 - 自动检索得到的论文元数据
 
@@ -340,6 +374,7 @@ python3 -m idea_workbench evidence my-idea
 | `reports/details/novelty_matrix.md` | 每个 claim 的查重/重合风险 |
 | `reports/details/reviewer_report.md` | 审稿式批判 |
 | `reports/details/evidence_qa.md` | PDF 证据问答状态和结果 |
+| `reports/details/ingest.md` | 低门槛导入记录 |
 | `reports/details/search_log.md` | 文献检索记录 |
 | `reports/details/pdf_downloads.md` | PDF 下载记录 |
 | `reports/details/research_rounds.md` | 闭环 research 的中间轮次 |
@@ -381,6 +416,7 @@ python3 -m idea_workbench run-deep my-idea --offline-search
 ```bash
 python3 -m idea_workbench doctor my-idea
 python3 -m idea_workbench run-deep my-idea --dry-run
+python3 -m idea_workbench ingest my-idea
 python3 -m idea_workbench run-deep my-idea
 python3 -m idea_workbench research my-idea
 ```
@@ -443,7 +479,9 @@ my-idea/
   secrets.local.yaml
   queries.yaml
   papers/
+    inbox/
     manual_papers.json
+    imported_papers.json
     api_papers.json
     papers_with_pdfs.json
     pdfs/*.pdf
@@ -454,6 +492,7 @@ my-idea/
     research.md
     details/
       literature_store.md
+      ingest.md
       novelty_matrix.md
       reviewer_report.md
       evidence_qa.md

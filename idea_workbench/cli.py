@@ -12,6 +12,7 @@ from .heuristics import (
     generate_queries,
     refine_ideas,
 )
+from .ingest import run_ingest
 from .llm_workflow import (
     doctor_report,
     render_doctor,
@@ -95,6 +96,12 @@ def build_parser() -> argparse.ArgumentParser:
     evidence.add_argument("project")
     evidence.add_argument("--mock", action="store_true", help="use mock evidence QA for validation/tests")
     evidence.set_defaults(func=cmd_evidence)
+
+    ingest = sub.add_parser("ingest", help="import low-friction paper inputs from papers/inbox")
+    ingest.add_argument("project")
+    ingest.add_argument("--inbox", default=None, help="directory to scan; defaults to papers/inbox")
+    ingest.add_argument("--output", default="imported_papers.json", help="output JSON under papers/")
+    ingest.set_defaults(func=cmd_ingest)
 
     pdfs = sub.add_parser("pdfs", help="resolve and download PDFs for top retrieved papers")
     pdfs.add_argument("project")
@@ -220,6 +227,15 @@ def cmd_evidence(args: argparse.Namespace) -> int:
     project = assert_project(args.project)
     path = run_evidence(project, mock=True if args.mock else None)
     print(f"wrote {path}")
+    return 0
+
+
+def cmd_ingest(args: argparse.Namespace) -> int:
+    project = assert_project(args.project)
+    result = run_ingest(project, inbox=args.inbox, output=args.output)
+    print(f"wrote {result.index_path}")
+    print(f"wrote {result.report_path}")
+    print(f"papers: {len(result.papers)}")
     return 0
 
 

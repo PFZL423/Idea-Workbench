@@ -611,14 +611,18 @@ def run_research(
         "quality_bar": read_prompt("research_quality_bar"),
         "language_instruction": language_instruction(config),
     }
-    opportunity_context = retrieve_stage_context(
-        store=literature_store,
-        stage="research_opportunity_miner",
-        base_context=base_context,
+    opportunity_context = compact_research_opportunity_context(
+        retrieve_stage_context(
+            store=literature_store,
+            stage="research_opportunity_miner",
+            base_context=base_context,
+            evidence_limit=8,
+            passage_limit=4,
+        )
     )
     opportunities = cached_stage(
         stage_dir / "opportunities.json",
-        {"stage_version": 1, "context": opportunity_context, "shared": shared},
+        {"stage_version": 2, "context": opportunity_context, "shared": shared},
         lambda: mine_research_opportunities(config, trace, opportunity_context, shared),
         progress=progress,
         label="opportunity mining [strong]",
@@ -1317,6 +1321,108 @@ def compact_revised_research_ideas(revised: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def compact_research_opportunity_context(context: dict[str, Any]) -> dict[str, Any]:
+    compact = dict(context)
+    compact["brief"] = compact_brief_for_opportunity(context.get("brief", {}))
+    compact["claims"] = compact_claims_for_opportunity(context.get("claims", {}))
+    compact["novelty_summary"] = compact_novelty_for_opportunity(context.get("novelty_summary", {}))
+    compact["reviewer_summary"] = compact_review_for_opportunity(context.get("reviewer_summary", {}))
+    compact["evidence_items"] = [
+        {
+            **item,
+            "text": truncate_text(item.get("text", ""), 520),
+        }
+        for item in context.get("evidence_items", [])[:8]
+        if isinstance(item, dict)
+    ]
+    compact["paper_passages"] = [
+        {
+            **item,
+            "text": truncate_text(item.get("text", ""), 700),
+        }
+        for item in context.get("paper_passages", [])[:4]
+        if isinstance(item, dict)
+    ]
+    compact["selected_papers"] = context.get("selected_papers", [])[:8]
+    return compact
+
+
+def compact_brief_for_opportunity(brief: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(brief, dict):
+        return {}
+    return {
+        "topic": brief.get("topic", ""),
+        "problem_statement": truncate_text(brief.get("problem_statement", ""), 650),
+        "domain": brief.get("domain", [])[:6],
+        "known_context": [truncate_text(item, 180) for item in brief.get("known_context", [])[:6]],
+        "uncertainties": [truncate_text(item, 180) for item in brief.get("uncertainties", [])[:6]],
+    }
+
+
+def compact_claims_for_opportunity(claims: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(claims, dict):
+        return {}
+    return {
+        "claims": [
+            {
+                "id": claim.get("id", ""),
+                "type": claim.get("type", ""),
+                "claim": truncate_text(claim.get("claim", ""), 300),
+                "mechanism": truncate_text(claim.get("mechanism", ""), 200),
+                "task_context": truncate_text(claim.get("task_context", ""), 160),
+                "risk_if_false": truncate_text(claim.get("risk_if_false", ""), 180),
+                "equivalent_terms": claim.get("equivalent_terms", [])[:6],
+            }
+            for claim in claims.get("claims", [])[:6]
+            if isinstance(claim, dict)
+        ],
+        "risk_questions": [truncate_text(question, 180) for question in claims.get("risk_questions", [])[:6]],
+    }
+
+
+def compact_novelty_for_opportunity(novelty: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(novelty, dict):
+        return {}
+    return {
+        "overall_recommendation": novelty.get("overall_recommendation", ""),
+        "rows": [
+            {
+                "claim_id": row.get("claim_id", ""),
+                "claim": truncate_text(row.get("claim", ""), 260),
+                "risk": row.get("risk", ""),
+                "closest_papers": [
+                    {
+                        "title": paper.get("title", ""),
+                        "year": paper.get("year", ""),
+                        "overlap": truncate_text(paper.get("overlap", ""), 180),
+                        "difference": truncate_text(paper.get("difference", ""), 180),
+                    }
+                    for paper in row.get("closest_papers", [])[:2]
+                    if isinstance(paper, dict)
+                ],
+                "positioning": truncate_text(row.get("positioning", ""), 240),
+            }
+            for row in novelty.get("rows", [])[:6]
+            if isinstance(row, dict)
+        ],
+    }
+
+
+def compact_review_for_opportunity(review: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(review, dict):
+        return {}
+    return {
+        "summary": truncate_text(review.get("summary", ""), 520),
+        "recommendation": review.get("recommendation", ""),
+        "strongest_objections": [truncate_text(item, 220) for item in review.get("strongest_objections", [])[:4]],
+        "reviewer_likely_prior_work_attack": [
+            truncate_text(item, 220) for item in review.get("reviewer_likely_prior_work_attack", [])[:4]
+        ],
+        "experiment_concerns": [truncate_text(item, 220) for item in review.get("experiment_concerns", [])[:4]],
+        "positioning_advice": truncate_text(review.get("positioning_advice", ""), 420),
+    }
+
+
 def truncate_text(value: Any, limit: int) -> str:
     text = str(value or "").strip()
     if len(text) <= limit:
@@ -1492,7 +1598,12 @@ def mine_research_opportunities(
         stage="research_opportunity_miner",
         validator=normalize_research_opportunities,
         temperature=0.25,
-        timeout=float(config.get("research_timeout_sec", config.get("llm_timeout_sec", 240))),
+        timeout=float(
+            config.get(
+                "research_opportunity_timeout_sec",
+                config.get("research_timeout_sec", config.get("llm_timeout_sec", 360)),
+            )
+        ),
     )
 
 

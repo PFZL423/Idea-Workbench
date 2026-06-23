@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 
-PROJECT_DIRS = ("papers", "reports", "state", "logs", "traces", "evidence")
+PROJECT_DIRS = ("papers", "papers/inbox", "papers/pdfs", "reports", "state", "logs", "traces", "evidence")
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "language": "zh",
