@@ -19,6 +19,7 @@ from .llm_workflow import (
     run_evidence,
     run_idea_search,
     run_literature,
+    run_research,
     run_review,
 )
 from .pdfs import run_pdf_fetch
@@ -131,6 +132,13 @@ def build_parser() -> argparse.ArgumentParser:
     idea_search.add_argument("--dry-run", action="store_true", help="write idea-search prompts without calling the LLM")
     idea_search.add_argument("--refresh-evidence-store", action="store_true", help="rebuild the stage-aware literature evidence store")
     idea_search.set_defaults(func=cmd_idea_search)
+
+    research = sub.add_parser("research", help="run closed-loop builder/critic/reviser research workflow after run-deep")
+    research.add_argument("project")
+    research.add_argument("--ideas", type=int, default=5, help="number of initial research ideas to build")
+    research.add_argument("--final", type=int, default=3, help="number of final directions to select")
+    research.add_argument("--refresh-evidence-store", action="store_true", help="rebuild the stage-aware literature evidence store")
+    research.set_defaults(func=cmd_research)
 
     run_deep_parser = sub.add_parser("run-deep", help="run the LLM-first deep research idea workflow")
     run_deep_parser.add_argument("project")
@@ -275,6 +283,18 @@ def cmd_idea_search(args: argparse.Namespace) -> int:
         shortlist=args.shortlist,
         final=args.final,
         dry_run=args.dry_run,
+        refresh_evidence_store=args.refresh_evidence_store,
+    )
+    print(f"wrote {path}")
+    return 0
+
+
+def cmd_research(args: argparse.Namespace) -> int:
+    project = assert_project(args.project)
+    path = run_research(
+        project,
+        ideas=args.ideas,
+        final=args.final,
         refresh_evidence_store=args.refresh_evidence_store,
     )
     print(f"wrote {path}")

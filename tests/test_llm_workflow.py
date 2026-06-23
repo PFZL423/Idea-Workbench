@@ -185,6 +185,24 @@ model_tiers:
             self.assertTrue((project / "state" / "idea_search_stages" / "branches_8_batch_1.json").exists())
             self.assertTrue(state["final"]["final_ideas"])
 
+    def test_research_mock_end_to_end(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "idea"
+            self.run_cli("init", str(project), "--seed-text", "world action model for robot manipulation")
+            env = {"GPT_API_BASE_URL": "mock://idea-workbench", "GPT_API_KEY": "mock-key"}
+            self.run_cli("run-deep", str(project), "--offline-search", env_extra=env)
+            self.run_cli("research", str(project), "--ideas", "4", "--final", "2", env_extra=env)
+
+            report = (project / "reports" / "research.md").read_text(encoding="utf-8")
+            rounds = (project / "reports" / "details" / "research_rounds.md").read_text(encoding="utf-8")
+            state = json.loads((project / "state" / "research_workflow.json").read_text(encoding="utf-8"))
+            self.assertIn("闭环 Research Workflow 报告", report)
+            self.assertIn("WAM", report)
+            self.assertIn("Critic Panel", rounds)
+            self.assertEqual(state["parameters"]["ideas"], 4)
+            self.assertTrue(state["final"]["final_ideas"])
+            self.assertTrue((project / "state" / "research_stages" / "critic_panel.json").exists())
+
     def test_idea_search_dry_run_writes_prompts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp) / "idea"

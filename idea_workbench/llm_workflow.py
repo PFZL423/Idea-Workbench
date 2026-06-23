@@ -30,6 +30,11 @@ from .schemas import (
     MECHANISM_TRANSFER_SCHEMA,
     NOVELTY_SCHEMA,
     QUERY_SCHEMA,
+    RESEARCH_CRITIC_SCHEMA,
+    RESEARCH_DECISION_SCHEMA,
+    RESEARCH_IDEA_SCHEMA,
+    RESEARCH_OPPORTUNITY_SCHEMA,
+    RESEARCH_REVISION_SCHEMA,
     REVIEW_SCHEMA,
     STRENGTHENED_IDEAS_SCHEMA,
     normalize_bottlenecks,
@@ -43,6 +48,11 @@ from .schemas import (
     normalize_matrix,
     normalize_mechanism_transfers,
     normalize_queries,
+    normalize_research_critic,
+    normalize_research_decision,
+    normalize_research_ideas,
+    normalize_research_opportunities,
+    normalize_research_revision,
     normalize_review,
     normalize_strengthened_ideas,
 )
@@ -405,7 +415,7 @@ def run_idea_search(
 ) -> Path:
     config = load_config(project)
     trace = TraceLogger(project.traces_dir)
-    base_context = load_idea_search_base_context(project)
+    base_context = load_idea_search_base_context(project, command_name="idea-search")
     params = {
         "branches": max(1, branches),
         "shortlist": max(1, shortlist),
@@ -560,7 +570,163 @@ def run_idea_search(
     return path
 
 
-def load_idea_search_base_context(project: IdeaProject) -> dict[str, Any]:
+def run_research(
+    project: IdeaProject,
+    *,
+    ideas: int = 5,
+    final: int = 3,
+    refresh_evidence_store: bool = False,
+) -> Path:
+    config = load_config(project)
+    trace = TraceLogger(project.traces_dir)
+    base_context = load_idea_search_base_context(project, command_name="research")
+    params = {"ideas": max(1, ideas), "final": max(1, final)}
+
+    assert_llm_ready(config, tiers=("strong", "frontier"))
+    progress("research: start")
+
+    papers = load_project_papers(project)
+    literature_store = build_or_load_literature_store(
+        project,
+        papers=papers,
+        brief=base_context["brief"],
+        claims=base_context["claims"],
+        novelty_matrix=base_context["novelty_matrix"],
+        reviewer_report=base_context["reviewer_report"],
+        evidence_qa=base_context["evidence_qa"],
+        refresh=refresh_evidence_store,
+        progress=progress,
+    )
+
+    stage_dir = project.state_dir / "research_stages"
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    if refresh_evidence_store:
+        clear_stage_cache(stage_dir)
+
+    shared = {
+        "quality_bar": read_prompt("research_quality_bar"),
+        "language_instruction": language_instruction(config),
+    }
+    opportunity_context = retrieve_stage_context(
+        store=literature_store,
+        stage="research_opportunity_miner",
+        base_context=base_context,
+    )
+    opportunities = cached_stage(
+        stage_dir / "opportunities.json",
+        {"stage_version": 1, "context": opportunity_context, "shared": shared},
+        lambda: mine_research_opportunities(config, trace, opportunity_context, shared),
+        progress=progress,
+        label="opportunity mining [strong]",
+    )
+
+    builder_context = retrieve_stage_context(
+        store=literature_store,
+        stage="research_builder",
+        base_context=base_context,
+        extra_context={"opportunities": summarize_research_opportunities(opportunities)},
+    )
+    initial_ideas = cached_stage(
+        stage_dir / f"initial_ideas_{params['ideas']}.json",
+        {
+            "stage_version": 1,
+            "context": builder_context,
+            "opportunities": summarize_research_opportunities(opportunities),
+            "ideas": params["ideas"],
+            "shared": shared,
+        },
+        lambda: build_research_ideas(config, trace, builder_context, opportunities, params["ideas"], shared),
+        progress=progress,
+        label=f"builder round [strong, {params['ideas']}]",
+    )
+
+    critic_context = retrieve_stage_context(
+        store=literature_store,
+        stage="research_critic_panel",
+        base_context=base_context,
+        extra_context={"ideas": summarize_research_ideas(initial_ideas)},
+    )
+    critic = cached_stage(
+        stage_dir / "critic_panel.json",
+        {
+            "stage_version": 1,
+            "context": critic_context,
+            "ideas": summarize_research_ideas(initial_ideas),
+            "shared": shared,
+        },
+        lambda: critique_research_ideas(config, trace, critic_context, initial_ideas, shared),
+        progress=progress,
+        label="comprehensive critic [frontier]",
+    )
+
+    reviser_context = retrieve_stage_context(
+        store=literature_store,
+        stage="research_reviser",
+        base_context=base_context,
+        extra_context={"ideas": summarize_research_ideas(initial_ideas), "critic": summarize_research_critic(critic)},
+    )
+    revised = cached_stage(
+        stage_dir / "revised_ideas.json",
+        {
+            "stage_version": 1,
+            "context": reviser_context,
+            "ideas": summarize_research_ideas(initial_ideas),
+            "critic": summarize_research_critic(critic),
+            "shared": shared,
+        },
+        lambda: revise_research_ideas(config, trace, reviser_context, initial_ideas, critic, shared),
+        progress=progress,
+        label="builder revision [strong]",
+    )
+
+    chair_context = retrieve_stage_context(
+        store=literature_store,
+        stage="research_chair",
+        base_context=base_context,
+        extra_context={
+            "opportunities": summarize_research_opportunities(opportunities),
+            "critic": summarize_research_critic(critic),
+            "revised_ideas": summarize_revised_research_ideas(revised),
+        },
+    )
+    decision = cached_stage(
+        stage_dir / f"chair_decision_{params['final']}.json",
+        {
+            "stage_version": 1,
+            "context": chair_context,
+            "opportunities": summarize_research_opportunities(opportunities),
+            "critic": summarize_research_critic(critic),
+            "revised": summarize_revised_research_ideas(revised),
+            "final": params["final"],
+            "shared": shared,
+        },
+        lambda: decide_research(config, trace, chair_context, opportunities, critic, revised, params["final"], shared),
+        progress=progress,
+        label=f"research chair [frontier, top {params['final']}]",
+    )
+
+    result = {
+        "parameters": params,
+        "literature_store": {
+            "papers": literature_store.get("paper_count", 0),
+            "passages": literature_store.get("passage_count", 0),
+            "evidence_items": literature_store.get("evidence_count", 0),
+        },
+        "opportunities": opportunities,
+        "initial_ideas": initial_ideas,
+        "critic_panel": critic,
+        "revised_ideas": revised,
+        "final": decision,
+    }
+    write_json(project.state_dir / "research_workflow.json", result)
+    write_text(detail_report_path(project, "research_rounds.md"), render_research_rounds(result))
+    path = project.reports_dir / "research.md"
+    write_text(path, render_research(result))
+    progress(f"research: wrote {path}")
+    return path
+
+
+def load_idea_search_base_context(project: IdeaProject, *, command_name: str = "idea-search") -> dict[str, Any]:
     required = {
         "brief": project.state_dir / "brief.json",
         "claims": project.state_dir / "claims.json",
@@ -570,7 +736,7 @@ def load_idea_search_base_context(project: IdeaProject) -> dict[str, Any]:
     missing = [name for name, path in required.items() if not path.exists()]
     if missing:
         raise ModelConfigError(
-            "idea-search requires run-deep artifacts first. Missing: "
+            f"{command_name} requires run-deep artifacts first. Missing: "
             + ", ".join(missing)
             + ". Run `python3 -m idea_workbench run-deep <project>` first."
         )
@@ -961,6 +1127,192 @@ def summarize_strengthened(strengthened: dict[str, Any]) -> list[dict[str, Any]]
     ]
 
 
+def language_instruction(config: dict[str, Any]) -> str:
+    language = str(config.get("language", "zh") or "zh").lower()
+    if language in {"en", "english"}:
+        return "Use English for human-facing strings."
+    if language in {"bilingual", "zh-en", "zh_en"}:
+        return (
+            "Use Chinese as the primary language and add concise English equivalents only where useful. "
+            "Keep established technical terms in English."
+        )
+    return (
+        "Use Chinese for human-facing reasoning and report text. Keep established technical terms in English, "
+        "including Transformer, RL, WAM, diffusion model, world model, benchmark, baseline, representation learning, "
+        "and model-based control."
+    )
+
+
+def summarize_research_opportunities(opportunities: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": item.get("id", ""),
+            "bottleneck": truncate_text(item.get("bottleneck", ""), 280),
+            "why_important": truncate_text(item.get("why_important", ""), 220),
+            "novelty_path": item.get("novelty_path", ""),
+            "risk": truncate_text(item.get("risk", ""), 180),
+        }
+        for item in opportunities.get("bottleneck_opportunities", [])[:10]
+        if isinstance(item, dict)
+    ]
+
+
+def compact_research_opportunities(opportunities: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "bottleneck_opportunities": [
+            {
+                "id": item.get("id", ""),
+                "bottleneck": truncate_text(item.get("bottleneck", ""), 360),
+                "why_important": truncate_text(item.get("why_important", ""), 280),
+                "evidence_signal": truncate_text(item.get("evidence_signal", ""), 260),
+                "mechanism_transfer_candidates": [
+                    truncate_text(candidate, 160) for candidate in item.get("mechanism_transfer_candidates", [])[:5]
+                ],
+                "novelty_path": item.get("novelty_path", ""),
+                "risk": truncate_text(item.get("risk", ""), 220),
+                "evidence_needed": [truncate_text(evidence, 140) for evidence in item.get("evidence_needed", [])[:4]],
+            }
+            for item in opportunities.get("bottleneck_opportunities", [])[:10]
+            if isinstance(item, dict)
+        ],
+        "quality_bar_notes": [truncate_text(note, 180) for note in opportunities.get("quality_bar_notes", [])[:6]],
+    }
+
+
+def summarize_research_ideas(ideas: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": item.get("id", ""),
+            "name": item.get("name", ""),
+            "central_insight": truncate_text(item.get("central_insight", ""), 260),
+            "technical_move": truncate_text(item.get("technical_move", ""), 220),
+            "minimum_discriminating_experiment": truncate_text(item.get("minimum_discriminating_experiment", ""), 220),
+            "maturity": item.get("maturity", ""),
+        }
+        for item in ideas.get("ideas", [])[:12]
+        if isinstance(item, dict)
+    ]
+
+
+def compact_research_ideas(ideas: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "ideas": [
+            {
+                "id": item.get("id", ""),
+                "name": item.get("name", ""),
+                "seed_source": item.get("seed_source", ""),
+                "central_insight": truncate_text(item.get("central_insight", ""), 360),
+                "problem_framing": truncate_text(item.get("problem_framing", ""), 300),
+                "nontrivial_mechanism_match": truncate_text(item.get("nontrivial_mechanism_match", ""), 320),
+                "technical_move": truncate_text(item.get("technical_move", ""), 320),
+                "novelty_boundary": truncate_text(item.get("novelty_boundary", ""), 300),
+                "stronger_baseline_to_beat": truncate_text(item.get("stronger_baseline_to_beat", ""), 240),
+                "minimum_discriminating_experiment": truncate_text(item.get("minimum_discriminating_experiment", ""), 300),
+                "falsifiable_prediction": truncate_text(item.get("falsifiable_prediction", ""), 240),
+                "failure_value": truncate_text(item.get("failure_value", ""), 240),
+                "main_risks": [truncate_text(risk, 160) for risk in item.get("main_risks", [])[:4]],
+                "evidence_needed": [truncate_text(evidence, 140) for evidence in item.get("evidence_needed", [])[:4]],
+                "maturity": item.get("maturity", ""),
+            }
+            for item in ideas.get("ideas", [])[:12]
+            if isinstance(item, dict)
+        ]
+    }
+
+
+def summarize_research_critic(critic: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "panel_summary": truncate_text(critic.get("panel_summary", ""), 600),
+        "reviews": [
+            {
+                "idea_id": item.get("idea_id", ""),
+                "overall_decision": item.get("overall_decision", ""),
+                "current_weaknesses": [truncate_text(weakness, 160) for weakness in item.get("current_weaknesses", [])[:4]],
+                "upgrade_opportunities": [
+                    truncate_text(opportunity, 160) for opportunity in item.get("upgrade_opportunities", [])[:4]
+                ],
+                "better_framing": truncate_text(item.get("better_framing", ""), 220),
+            }
+            for item in critic.get("reviews", [])[:12]
+            if isinstance(item, dict)
+        ],
+        "hard_reject_ids": critic.get("hard_reject_ids", [])[:12],
+    }
+
+
+def compact_research_critic(critic: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "panel_summary": truncate_text(critic.get("panel_summary", ""), 700),
+        "reviews": [
+            {
+                "idea_id": item.get("idea_id", ""),
+                "overall_decision": item.get("overall_decision", ""),
+                "private_scores": item.get("private_scores", {}),
+                "current_weaknesses": [truncate_text(weakness, 180) for weakness in item.get("current_weaknesses", [])[:5]],
+                "repairable_potential": truncate_text(item.get("repairable_potential", ""), 260),
+                "irrecoverable_flaws": [truncate_text(flaw, 180) for flaw in item.get("irrecoverable_flaws", [])[:4]],
+                "upgrade_opportunities": [
+                    truncate_text(opportunity, 200) for opportunity in item.get("upgrade_opportunities", [])[:5]
+                ],
+                "better_framing": truncate_text(item.get("better_framing", ""), 260),
+                "stronger_mechanism_options": [
+                    truncate_text(option, 180) for option in item.get("stronger_mechanism_options", [])[:4]
+                ],
+                "missing_evidence": [truncate_text(evidence, 140) for evidence in item.get("missing_evidence", [])[:4]],
+            }
+            for item in critic.get("reviews", [])[:12]
+            if isinstance(item, dict)
+        ],
+        "hard_reject_ids": critic.get("hard_reject_ids", [])[:12],
+    }
+
+
+def summarize_revised_research_ideas(revised: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": item.get("id", ""),
+            "name": item.get("name", ""),
+            "revision_strategy": item.get("revision_strategy", ""),
+            "central_insight": truncate_text(item.get("central_insight", ""), 260),
+            "technical_move": truncate_text(item.get("technical_move", ""), 220),
+            "minimum_discriminating_experiment": truncate_text(item.get("minimum_discriminating_experiment", ""), 220),
+        }
+        for item in revised.get("revised_ideas", [])[:12]
+        if isinstance(item, dict)
+    ]
+
+
+def compact_revised_research_ideas(revised: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "revised_ideas": [
+            {
+                "id": item.get("id", ""),
+                "source_idea_ids": item.get("source_idea_ids", [])[:5],
+                "name": item.get("name", ""),
+                "revision_strategy": item.get("revision_strategy", ""),
+                "critic_issues_addressed": [
+                    truncate_text(issue, 160) for issue in item.get("critic_issues_addressed", [])[:5]
+                ],
+                "central_insight": truncate_text(item.get("central_insight", ""), 360),
+                "problem_framing": truncate_text(item.get("problem_framing", ""), 300),
+                "nontrivial_mechanism_match": truncate_text(item.get("nontrivial_mechanism_match", ""), 320),
+                "technical_move": truncate_text(item.get("technical_move", ""), 320),
+                "novelty_boundary": truncate_text(item.get("novelty_boundary", ""), 300),
+                "stronger_baseline_to_beat": truncate_text(item.get("stronger_baseline_to_beat", ""), 240),
+                "minimum_discriminating_experiment": truncate_text(item.get("minimum_discriminating_experiment", ""), 300),
+                "falsifiable_prediction": truncate_text(item.get("falsifiable_prediction", ""), 240),
+                "failure_value": truncate_text(item.get("failure_value", ""), 240),
+                "main_risks": [truncate_text(risk, 160) for risk in item.get("main_risks", [])[:4]],
+                "evidence_needed": [truncate_text(evidence, 140) for evidence in item.get("evidence_needed", [])[:4]],
+                "maturity": item.get("maturity", ""),
+            }
+            for item in revised.get("revised_ideas", [])[:12]
+            if isinstance(item, dict)
+        ],
+        "discarded": revised.get("discarded", [])[:12],
+    }
+
+
 def truncate_text(value: Any, limit: int) -> str:
     text = str(value or "").strip()
     if len(text) <= limit:
@@ -1112,6 +1464,149 @@ def decide_ideas(
         validator=normalize_idea_search_result,
         temperature=0.1,
         timeout=240,
+    )
+
+
+def mine_research_opportunities(
+    config: dict[str, Any],
+    trace: TraceLogger,
+    context: dict[str, Any],
+    shared: dict[str, Any],
+) -> dict[str, Any]:
+    return call_json(
+        config,
+        "strong",
+        prompt_messages(
+            "research_opportunity_miner",
+            {
+                "schema": RESEARCH_OPPORTUNITY_SCHEMA,
+                "context": context,
+                **shared,
+            },
+        ),
+        trace=trace,
+        stage="research_opportunity_miner",
+        validator=normalize_research_opportunities,
+        temperature=0.25,
+        timeout=float(config.get("research_timeout_sec", config.get("llm_timeout_sec", 240))),
+    )
+
+
+def build_research_ideas(
+    config: dict[str, Any],
+    trace: TraceLogger,
+    context: dict[str, Any],
+    opportunities: dict[str, Any],
+    idea_count: int,
+    shared: dict[str, Any],
+) -> dict[str, Any]:
+    return call_json(
+        config,
+        "strong",
+        prompt_messages(
+            "research_builder",
+            {
+                "schema": RESEARCH_IDEA_SCHEMA,
+                "idea_count": idea_count,
+                "context": context,
+                "opportunities": compact_research_opportunities(opportunities),
+                **shared,
+            },
+        ),
+        trace=trace,
+        stage="research_builder",
+        validator=normalize_research_ideas,
+        temperature=0.45,
+        timeout=float(config.get("research_timeout_sec", config.get("llm_timeout_sec", 240))),
+    )
+
+
+def critique_research_ideas(
+    config: dict[str, Any],
+    trace: TraceLogger,
+    context: dict[str, Any],
+    ideas: dict[str, Any],
+    shared: dict[str, Any],
+) -> dict[str, Any]:
+    return call_json(
+        config,
+        "frontier",
+        prompt_messages(
+            "research_critic_panel",
+            {
+                "schema": RESEARCH_CRITIC_SCHEMA,
+                "context": context,
+                "ideas": compact_research_ideas(ideas),
+                **shared,
+            },
+        ),
+        trace=trace,
+        stage="research_critic_panel",
+        validator=normalize_research_critic,
+        temperature=0.15,
+        timeout=float(config.get("research_critic_timeout_sec", config.get("llm_timeout_sec", 300))),
+    )
+
+
+def revise_research_ideas(
+    config: dict[str, Any],
+    trace: TraceLogger,
+    context: dict[str, Any],
+    ideas: dict[str, Any],
+    critic: dict[str, Any],
+    shared: dict[str, Any],
+) -> dict[str, Any]:
+    return call_json(
+        config,
+        "strong",
+        prompt_messages(
+            "research_reviser",
+            {
+                "schema": RESEARCH_REVISION_SCHEMA,
+                "context": context,
+                "ideas": compact_research_ideas(ideas),
+                "critic_panel": compact_research_critic(critic),
+                **shared,
+            },
+        ),
+        trace=trace,
+        stage="research_reviser",
+        validator=normalize_research_revision,
+        temperature=0.35,
+        timeout=float(config.get("research_timeout_sec", config.get("llm_timeout_sec", 240))),
+    )
+
+
+def decide_research(
+    config: dict[str, Any],
+    trace: TraceLogger,
+    context: dict[str, Any],
+    opportunities: dict[str, Any],
+    critic: dict[str, Any],
+    revised: dict[str, Any],
+    final_count: int,
+    shared: dict[str, Any],
+) -> dict[str, Any]:
+    return call_json(
+        config,
+        "frontier",
+        prompt_messages(
+            "research_chair",
+            {
+                "schema": RESEARCH_DECISION_SCHEMA,
+                "final_count": final_count,
+                "context": context,
+                "opportunities": compact_research_opportunities(opportunities),
+                "critic_panel": compact_research_critic(critic),
+                "revised_ideas": compact_revised_research_ideas(revised),
+                **shared,
+            },
+        ),
+        trace=trace,
+        stage="research_chair",
+        validator=normalize_research_decision,
+        temperature=0.1,
+        timeout=float(config.get("research_chair_timeout_sec", config.get("llm_timeout_sec", 300))),
     )
 
 
@@ -1875,4 +2370,128 @@ def render_idea_search(result: dict[str, Any]) -> str:
         lines.append(f"- {item}")
     if not final_result.get("global_risks"):
         lines.append("暂无。")
+    return "\n".join(lines).strip() + "\n"
+
+
+def render_research(result: dict[str, Any]) -> str:
+    final_result = result.get("final", {})
+    params = result.get("parameters", {})
+    store = result.get("literature_store", {})
+    lines = [
+        "# 闭环 Research Workflow 报告",
+        "",
+        f"- 初始候选数：{params.get('ideas', '')}",
+        f"- 最终选择数：{params.get('final', '')}",
+        f"- 文献数：{store.get('papers', '')}",
+        f"- PDF passages：{store.get('passages', '')}",
+        f"- evidence items：{store.get('evidence_items', '')}",
+        "",
+        "## 总结",
+        "",
+        final_result.get("summary", ""),
+        "",
+        "## 最终建议",
+        "",
+    ]
+    final_ideas = sorted(final_result.get("final_ideas", []), key=lambda item: item.get("rank", 999))
+    if not final_ideas:
+        lines.append("暂无。")
+    for idea in final_ideas:
+        lines.extend(
+            [
+                f"### {idea.get('rank', '')}. {idea.get('name', '')}",
+                "",
+                f"- 决策：{idea.get('decision', '')}",
+                f"- 为什么保留：{idea.get('why_selected', '')}",
+                f"- central insight：{idea.get('central_insight', '')}",
+                f"- novelty boundary：{idea.get('novelty_boundary', '')}",
+                f"- stronger baseline：{idea.get('stronger_baseline_to_beat', '')}",
+                f"- 最小区分实验：{idea.get('minimum_discriminating_experiment', '')}",
+                "",
+                "失败条件：",
+            ]
+        )
+        for item in idea.get("failure_conditions", []):
+            lines.append(f"- {item}")
+        lines.extend(["", "下一步文献检查："])
+        for item in idea.get("next_literature_checks", []):
+            lines.append(f"- {item}")
+        lines.extend(["", "下一步实验检查："])
+        for item in idea.get("next_experiment_checks", []):
+            lines.append(f"- {item}")
+        lines.append("")
+
+    lines.extend(["## Promising Pivots", ""])
+    for item in final_result.get("promising_pivots", []):
+        lines.append(f"- {item}")
+    if not final_result.get("promising_pivots"):
+        lines.append("暂无。")
+
+    lines.extend(["", "## 全局风险", ""])
+    for item in final_result.get("global_risks", []):
+        lines.append(f"- {item}")
+    if not final_result.get("global_risks"):
+        lines.append("暂无。")
+    return "\n".join(lines).strip() + "\n"
+
+
+def render_research_rounds(result: dict[str, Any]) -> str:
+    lines = [
+        "# Research Workflow Rounds",
+        "",
+        "## Opportunities",
+        "",
+    ]
+    opportunity_rows = [
+        [
+            item.get("id", ""),
+            item.get("novelty_path", ""),
+            item.get("bottleneck", ""),
+            item.get("why_important", ""),
+            item.get("risk", ""),
+        ]
+        for item in result.get("opportunities", {}).get("bottleneck_opportunities", [])
+    ]
+    lines.append(md_table(["id", "path", "bottleneck", "why important", "risk"], opportunity_rows) if opportunity_rows else "暂无。")
+
+    lines.extend(["", "## Initial Ideas", ""])
+    initial_rows = [
+        [
+            item.get("id", ""),
+            item.get("name", ""),
+            item.get("central_insight", ""),
+            item.get("stronger_baseline_to_beat", ""),
+            item.get("maturity", ""),
+        ]
+        for item in result.get("initial_ideas", {}).get("ideas", [])
+    ]
+    lines.append(md_table(["id", "name", "central insight", "stronger baseline", "maturity"], initial_rows) if initial_rows else "暂无。")
+
+    lines.extend(["", "## Critic Panel", ""])
+    critic = result.get("critic_panel", {})
+    lines.extend(["", critic.get("panel_summary", ""), ""])
+    critic_rows = [
+        [
+            item.get("idea_id", ""),
+            item.get("overall_decision", ""),
+            "; ".join(item.get("current_weaknesses", [])[:3]),
+            "; ".join(item.get("upgrade_opportunities", [])[:3]),
+            item.get("better_framing", ""),
+        ]
+        for item in critic.get("reviews", [])
+    ]
+    lines.append(md_table(["idea", "decision", "weaknesses", "upgrade opportunities", "better framing"], critic_rows) if critic_rows else "暂无。")
+
+    lines.extend(["", "## Revised Ideas", ""])
+    revised_rows = [
+        [
+            item.get("id", ""),
+            item.get("revision_strategy", ""),
+            item.get("name", ""),
+            item.get("central_insight", ""),
+            item.get("minimum_discriminating_experiment", ""),
+        ]
+        for item in result.get("revised_ideas", {}).get("revised_ideas", [])
+    ]
+    lines.append(md_table(["id", "strategy", "name", "central insight", "minimum experiment"], revised_rows) if revised_rows else "暂无。")
     return "\n".join(lines).strip() + "\n"

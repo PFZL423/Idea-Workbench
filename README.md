@@ -222,6 +222,43 @@ python3 -m idea_workbench idea-search my-idea --branches 20 --shortlist 5 --fina
 python3 -m idea_workbench idea-search my-idea --dry-run
 ```
 
+### 9. 可选：运行闭环 research workflow
+
+如果你希望生成过程本身就带审查和修正，而不是先生成一批再最后筛选，运行：
+
+```bash
+python3 -m idea_workbench research my-idea
+```
+
+默认流程：
+
+```text
+机会挖掘 → Builder 生成少量候选 → comprehensive discovery critic → Builder 修正/转向 → Chair 最终选择
+```
+
+它的设计重点：
+
+- 不追求 Transformer / RL 级别范式创新。
+- 鼓励高质量机制迁移、failure mode 挖掘、问题重定义、benchmark / evaluation gap 和局部 method 改造。
+- Critic 不只是挑错，也必须给 upgrade opportunity、better framing、promising pivot。
+- Killer 逻辑被收进 comprehensive critic，只在合理修正后仍不可救时 hard reject。
+- 内部 JSON 字段保持英文；人看的报告默认中文，Transformer、RL、WAM、diffusion model、world model、benchmark、baseline 等术语保留英文。
+
+输出：
+
+```text
+my-idea/reports/research.md
+my-idea/reports/details/research_rounds.md
+my-idea/state/research_workflow.json
+my-idea/state/research_stages/*.json
+```
+
+可调预算：
+
+```bash
+python3 -m idea_workbench research my-idea --ideas 5 --final 3
+```
+
 ## 可选：下载检索结果里的 PDF
 
 `run-deep` 会先检索论文，并写入：
@@ -276,11 +313,13 @@ python3 -m idea_workbench evidence my-idea
 | --- | --- |
 | `reports/final_report_cn.md` | 总报告 |
 | `reports/idea_search.md` | 多分支 idea search 的最终结果 |
+| `reports/research.md` | 闭环 Builder/Critic/Reviser 的最终结果 |
 | `reports/details/novelty_matrix.md` | 每个 claim 的查重/重合风险 |
 | `reports/details/reviewer_report.md` | 审稿式批判 |
 | `reports/details/evidence_qa.md` | PDF 证据问答状态和结果 |
 | `reports/details/search_log.md` | 文献检索记录 |
 | `reports/details/pdf_downloads.md` | PDF 下载记录 |
+| `reports/details/research_rounds.md` | 闭环 research 的中间轮次 |
 
 默认只有核心报告放在 `reports/` 根目录；过程报告放在 `reports/details/`，避免一次运行后根目录太乱。
 
@@ -321,6 +360,7 @@ python3 -m idea_workbench doctor my-idea
 python3 -m idea_workbench run-deep my-idea --dry-run
 python3 -m idea_workbench run-deep my-idea
 python3 -m idea_workbench idea-search my-idea
+python3 -m idea_workbench research my-idea
 python3 -m idea_workbench pdfs my-idea --top 20
 python3 -m idea_workbench evidence my-idea
 ```
@@ -382,6 +422,7 @@ my-idea/
   reports/
     final_report_cn.md
     idea_search.md
+    research.md
     details/
       literature_store.md
       novelty_matrix.md
@@ -389,9 +430,12 @@ my-idea/
       evidence_qa.md
       search_log.md
       pdf_downloads.md
+      research_rounds.md
   state/
     literature_store.json
     idea_search_stages/*.json
+    research_workflow.json
+    research_stages/*.json
   evidence/
   traces/
 ```

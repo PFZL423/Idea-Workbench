@@ -244,6 +244,136 @@ IDEA_SEARCH_RESULT_SCHEMA = {
     "global_risks": ["string"],
 }
 
+RESEARCH_OPPORTUNITY_SCHEMA = {
+    "bottleneck_opportunities": [
+        {
+            "id": "O1",
+            "bottleneck": "string",
+            "why_important": "string",
+            "evidence_signal": "string",
+            "mechanism_transfer_candidates": ["string"],
+            "novelty_path": "mechanism_transfer|problem_reframing|failure_mode|benchmark_gap|local_method_change",
+            "risk": "string",
+            "evidence_needed": ["string"],
+        }
+    ],
+    "quality_bar_notes": ["string"],
+}
+
+RESEARCH_IDEA_SCHEMA = {
+    "ideas": [
+        {
+            "id": "R1",
+            "name": "string",
+            "seed_source": "string",
+            "central_insight": "string",
+            "problem_framing": "string",
+            "nontrivial_mechanism_match": "string",
+            "technical_move": "string",
+            "novelty_boundary": "string",
+            "stronger_baseline_to_beat": "string",
+            "minimum_discriminating_experiment": "string",
+            "falsifiable_prediction": "string",
+            "failure_value": "string",
+            "main_risks": ["string"],
+            "evidence_needed": ["string"],
+            "maturity": "rough|promising|strong",
+        }
+    ]
+}
+
+RESEARCH_CRITIC_SCHEMA = {
+    "panel_summary": "string",
+    "reviews": [
+        {
+            "idea_id": "R1",
+            "overall_decision": "strong|promising|repair|pivot|reject",
+            "private_scores": {
+                "novelty": "number 1-10",
+                "importance": "number 1-10",
+                "mechanism": "number 1-10",
+                "feasibility": "number 1-10",
+                "experiment": "number 1-10",
+                "evidence": "number 1-10",
+                "publication_potential": "number 1-10",
+            },
+            "current_weaknesses": ["string"],
+            "repairable_potential": "string",
+            "irrecoverable_flaws": ["string"],
+            "upgrade_opportunities": ["string"],
+            "better_framing": "string",
+            "stronger_mechanism_options": ["string"],
+            "missing_evidence": ["string"],
+            "lens_reviews": [
+                {
+                    "lens": "novelty|mechanism|feasibility|experiment|contribution|adjacent_transfer",
+                    "finding": "string",
+                    "decision": "strong|promising|repair|pivot|reject",
+                }
+            ],
+        }
+    ],
+    "hard_reject_ids": ["R3"],
+}
+
+RESEARCH_REVISION_SCHEMA = {
+    "revised_ideas": [
+        {
+            "id": "R1",
+            "source_idea_ids": ["R1"],
+            "name": "string",
+            "revision_strategy": "keep|repair|pivot|merge",
+            "critic_issues_addressed": ["string"],
+            "central_insight": "string",
+            "problem_framing": "string",
+            "nontrivial_mechanism_match": "string",
+            "technical_move": "string",
+            "novelty_boundary": "string",
+            "stronger_baseline_to_beat": "string",
+            "minimum_discriminating_experiment": "string",
+            "falsifiable_prediction": "string",
+            "failure_value": "string",
+            "main_risks": ["string"],
+            "evidence_needed": ["string"],
+            "maturity": "rough|promising|strong",
+        }
+    ],
+    "discarded": [
+        {
+            "idea_id": "R3",
+            "reason": "string",
+        }
+    ],
+}
+
+RESEARCH_DECISION_SCHEMA = {
+    "summary": "string",
+    "final_ideas": [
+        {
+            "rank": "integer",
+            "idea_id": "R1",
+            "name": "string",
+            "decision": "continue|needs_evidence|pivot|discard",
+            "why_selected": "string",
+            "central_insight": "string",
+            "novelty_boundary": "string",
+            "stronger_baseline_to_beat": "string",
+            "minimum_discriminating_experiment": "string",
+            "failure_conditions": ["string"],
+            "next_literature_checks": ["string"],
+            "next_experiment_checks": ["string"],
+        }
+    ],
+    "promising_pivots": ["string"],
+    "rejected": [
+        {
+            "idea_id": "R3",
+            "reason": "string",
+        }
+    ],
+    "global_risks": ["string"],
+}
+
 
 def ensure_dict(value: Any, schema_name: str) -> dict[str, Any]:
     if not isinstance(value, dict):
@@ -474,6 +604,131 @@ def normalize_idea_search_result(data: Any) -> dict[str, Any]:
         idea.setdefault("decision", "needs_evidence")
     obj.setdefault("summary", "")
     obj["runner_up_ids"] = ensure_string_list(obj.get("runner_up_ids", []))
+    obj["global_risks"] = ensure_string_list(obj.get("global_risks", []))
+    return obj
+
+
+def normalize_research_opportunities(data: Any) -> dict[str, Any]:
+    obj = ensure_dict(data, "ResearchOpportunityMap")
+    opportunities = obj.get("bottleneck_opportunities")
+    if not isinstance(opportunities, list) or not opportunities:
+        raise SchemaError("ResearchOpportunityMap.bottleneck_opportunities must be a non-empty list")
+    for index, item in enumerate(opportunities, start=1):
+        opportunity = ensure_dict(item, "ResearchOpportunity")
+        opportunity.setdefault("id", f"O{index}")
+        opportunity.setdefault("bottleneck", "")
+        opportunity.setdefault("why_important", "")
+        opportunity.setdefault("evidence_signal", "")
+        opportunity["mechanism_transfer_candidates"] = ensure_string_list(opportunity.get("mechanism_transfer_candidates", []))
+        opportunity.setdefault("novelty_path", "mechanism_transfer")
+        opportunity.setdefault("risk", "")
+        opportunity["evidence_needed"] = ensure_string_list(opportunity.get("evidence_needed", []))
+    obj["quality_bar_notes"] = ensure_string_list(obj.get("quality_bar_notes", []))
+    return obj
+
+
+def normalize_research_ideas(data: Any) -> dict[str, Any]:
+    obj = ensure_dict(data, "ResearchIdeaSet")
+    ideas = obj.get("ideas")
+    if not isinstance(ideas, list) or not ideas:
+        raise SchemaError("ResearchIdeaSet.ideas must be a non-empty list")
+    for index, item in enumerate(ideas, start=1):
+        idea = ensure_dict(item, "ResearchIdea")
+        idea.setdefault("id", f"R{index}")
+        idea.setdefault("name", "")
+        idea.setdefault("seed_source", "")
+        idea.setdefault("central_insight", "")
+        idea.setdefault("problem_framing", "")
+        idea.setdefault("nontrivial_mechanism_match", "")
+        idea.setdefault("technical_move", "")
+        idea.setdefault("novelty_boundary", "")
+        idea.setdefault("stronger_baseline_to_beat", "")
+        idea.setdefault("minimum_discriminating_experiment", "")
+        idea.setdefault("falsifiable_prediction", "")
+        idea.setdefault("failure_value", "")
+        idea["main_risks"] = ensure_string_list(idea.get("main_risks", []))
+        idea["evidence_needed"] = ensure_string_list(idea.get("evidence_needed", []))
+        idea.setdefault("maturity", "rough")
+    return obj
+
+
+def normalize_research_critic(data: Any) -> dict[str, Any]:
+    obj = ensure_dict(data, "ResearchCriticPanel")
+    reviews = obj.get("reviews")
+    if not isinstance(reviews, list) or not reviews:
+        raise SchemaError("ResearchCriticPanel.reviews must be a non-empty list")
+    for item in reviews:
+        review = ensure_dict(item, "ResearchIdeaReview")
+        require_keys(review, ["idea_id"], "ResearchIdeaReview")
+        review.setdefault("overall_decision", "repair")
+        scores = review.get("private_scores", {})
+        review["private_scores"] = scores if isinstance(scores, dict) else {}
+        review["current_weaknesses"] = ensure_string_list(review.get("current_weaknesses", []))
+        review.setdefault("repairable_potential", "")
+        review["irrecoverable_flaws"] = ensure_string_list(review.get("irrecoverable_flaws", []))
+        review["upgrade_opportunities"] = ensure_string_list(review.get("upgrade_opportunities", []))
+        review.setdefault("better_framing", "")
+        review["stronger_mechanism_options"] = ensure_string_list(review.get("stronger_mechanism_options", []))
+        review["missing_evidence"] = ensure_string_list(review.get("missing_evidence", []))
+        lenses = review.get("lens_reviews", [])
+        review["lens_reviews"] = lenses if isinstance(lenses, list) else []
+    obj.setdefault("panel_summary", "")
+    obj["hard_reject_ids"] = ensure_string_list(obj.get("hard_reject_ids", []))
+    return obj
+
+
+def normalize_research_revision(data: Any) -> dict[str, Any]:
+    obj = ensure_dict(data, "ResearchRevisionSet")
+    ideas = obj.get("revised_ideas")
+    if not isinstance(ideas, list) or not ideas:
+        raise SchemaError("ResearchRevisionSet.revised_ideas must be a non-empty list")
+    for index, item in enumerate(ideas, start=1):
+        idea = ensure_dict(item, "RevisedResearchIdea")
+        idea.setdefault("id", f"RR{index}")
+        idea["source_idea_ids"] = ensure_string_list(idea.get("source_idea_ids", []))
+        idea.setdefault("name", "")
+        idea.setdefault("revision_strategy", "repair")
+        idea["critic_issues_addressed"] = ensure_string_list(idea.get("critic_issues_addressed", []))
+        idea.setdefault("central_insight", "")
+        idea.setdefault("problem_framing", "")
+        idea.setdefault("nontrivial_mechanism_match", "")
+        idea.setdefault("technical_move", "")
+        idea.setdefault("novelty_boundary", "")
+        idea.setdefault("stronger_baseline_to_beat", "")
+        idea.setdefault("minimum_discriminating_experiment", "")
+        idea.setdefault("falsifiable_prediction", "")
+        idea.setdefault("failure_value", "")
+        idea["main_risks"] = ensure_string_list(idea.get("main_risks", []))
+        idea["evidence_needed"] = ensure_string_list(idea.get("evidence_needed", []))
+        idea.setdefault("maturity", "rough")
+    discarded = obj.get("discarded", [])
+    obj["discarded"] = discarded if isinstance(discarded, list) else []
+    return obj
+
+
+def normalize_research_decision(data: Any) -> dict[str, Any]:
+    obj = ensure_dict(data, "ResearchChairDecision")
+    ideas = obj.get("final_ideas")
+    if not isinstance(ideas, list) or not ideas:
+        raise SchemaError("ResearchChairDecision.final_ideas must be a non-empty list")
+    for index, item in enumerate(ideas, start=1):
+        idea = ensure_dict(item, "ResearchFinalIdea")
+        idea.setdefault("rank", index)
+        idea.setdefault("idea_id", "")
+        idea.setdefault("name", "")
+        idea.setdefault("decision", "needs_evidence")
+        idea.setdefault("why_selected", "")
+        idea.setdefault("central_insight", "")
+        idea.setdefault("novelty_boundary", "")
+        idea.setdefault("stronger_baseline_to_beat", "")
+        idea.setdefault("minimum_discriminating_experiment", "")
+        idea["failure_conditions"] = ensure_string_list(idea.get("failure_conditions", []))
+        idea["next_literature_checks"] = ensure_string_list(idea.get("next_literature_checks", []))
+        idea["next_experiment_checks"] = ensure_string_list(idea.get("next_experiment_checks", []))
+    obj.setdefault("summary", "")
+    obj["promising_pivots"] = ensure_string_list(obj.get("promising_pivots", []))
+    rejected = obj.get("rejected", [])
+    obj["rejected"] = rejected if isinstance(rejected, list) else []
     obj["global_risks"] = ensure_string_list(obj.get("global_risks", []))
     return obj
 

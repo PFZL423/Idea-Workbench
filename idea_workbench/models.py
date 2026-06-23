@@ -493,6 +493,123 @@ def mock_response(messages: list[dict[str, str]]) -> ModelResponse:
             "runner_up_ids": ["I2"],
             "global_risks": ["The contribution may become benchmark-only unless the probe reveals a real failure mode."],
         }
+    elif "ResearchOpportunityMap" in prompt or "research_opportunity_miner" in prompt:
+        data = {
+            "bottleneck_opportunities": [
+                {
+                    "id": "O1",
+                    "bottleneck": "prediction accuracy does not reveal whether a WAM exposes controllable action factors",
+                    "why_important": "这是 world model 用于 robot manipulation 时的关键断点，能把预测问题转成可证伪的控制诊断问题。",
+                    "evidence_signal": "novelty matrix and reviewer report both warn about affordance / controllable representation overlap.",
+                    "mechanism_transfer_candidates": ["intervention-based representation analysis", "causal factor probing"],
+                    "novelty_path": "failure_mode",
+                    "risk": "需要证明不是已有 affordance benchmark 的改名。",
+                    "evidence_needed": ["closest affordance benchmark papers", "controllable representation papers"],
+                }
+            ],
+            "quality_bar_notes": ["优先保留 rough but promising 的诊断型贡献，不追求范式级创新。"],
+        }
+    elif "ResearchIdeaSet" in prompt or "research_builder" in prompt:
+        data = {
+            "ideas": [
+                {
+                    "id": "R1",
+                    "name": "WAM controllability failure probe",
+                    "seed_source": "O1",
+                    "central_insight": "world model 的 prediction loss 可以和 action controllability 脱钩，这个脱钩本身可以成为贡献。",
+                    "problem_framing": "从做一个更强 WAM 改成测量 WAM 何时无法支持 controllable action effects。",
+                    "nontrivial_mechanism_match": "把 intervention-based representation analysis 映射到 robot action probes，而不是简单换模型。",
+                    "technical_move": "设计 action intervention probes，比较 prediction-matched WAMs 的 controllability ranking。",
+                    "novelty_boundary": "不是 generic world model architecture，而是 prediction-control gap 的诊断和最小实验协议。",
+                    "stronger_baseline_to_beat": "plain predictive world model plus affordance-style evaluation",
+                    "minimum_discriminating_experiment": "在 contact-rich pushing/rope 任务中匹配 prediction error，再比较 probe ranking 与 downstream success。",
+                    "falsifiable_prediction": "prediction-matched models 会在 controllability probes 上排序不同，且 probe 更能预测 action success。",
+                    "failure_value": "如果 probe 无效，也能界定 prediction loss 何时已经足够或 affordance metrics 已覆盖该 gap。",
+                    "main_risks": ["与 affordance benchmark 重叠", "probe 可能 task-specific"],
+                    "evidence_needed": ["affordance evaluation", "controllable representation learning"],
+                    "maturity": "promising",
+                }
+            ]
+        }
+    elif "ResearchCriticPanel" in prompt or "research_critic_panel" in prompt:
+        data = {
+            "panel_summary": "R1 有明确 central insight 和 failure-mode 贡献潜力，但必须把 novelty boundary 从 affordance evaluation 中切出来。",
+            "reviews": [
+                {
+                    "idea_id": "R1",
+                    "overall_decision": "repair",
+                    "private_scores": {
+                        "novelty": 7,
+                        "importance": 7,
+                        "mechanism": 6,
+                        "feasibility": 7,
+                        "experiment": 8,
+                        "evidence": 5,
+                        "publication_potential": 7,
+                    },
+                    "current_weaknesses": ["closest prior-work boundary still under-specified", "mechanism may look like renamed affordance probing"],
+                    "repairable_potential": "把核心收窄为 prediction-control gap 的诊断协议，并要求 stronger baseline 对照。",
+                    "irrecoverable_flaws": [],
+                    "upgrade_opportunities": ["turn negative cases into a benchmark axis", "add representation intervention analysis"],
+                    "better_framing": "When and why does predictive WAM accuracy fail as a proxy for controllable action effects?",
+                    "stronger_mechanism_options": ["intervention probes over action-sensitive latent factors"],
+                    "missing_evidence": ["recent affordance benchmark papers"],
+                    "lens_reviews": [
+                        {"lens": "novelty", "finding": "Needs closest-work boundary.", "decision": "repair"},
+                        {"lens": "experiment", "finding": "Minimum experiment is discriminating.", "decision": "promising"},
+                    ],
+                }
+            ],
+            "hard_reject_ids": [],
+        }
+    elif "ResearchRevisionSet" in prompt or "research_reviser" in prompt:
+        data = {
+            "revised_ideas": [
+                {
+                    "id": "RR1",
+                    "source_idea_ids": ["R1"],
+                    "name": "Prediction-control gap benchmark for WAMs",
+                    "revision_strategy": "repair",
+                    "critic_issues_addressed": ["narrowed novelty boundary", "added stronger baseline", "made failure value explicit"],
+                    "central_insight": "WAM 的 prediction accuracy 不能自动代表 controllable action effects；这个 gap 可以被系统测量。",
+                    "problem_framing": "建立 prediction-control gap 的最小 benchmark，而不是提出泛化的新 architecture。",
+                    "nontrivial_mechanism_match": "用 intervention probes 分析 action-sensitive latent factors，并和 affordance-style baseline 区分。",
+                    "technical_move": "构造 prediction-matched WAMs，测量 action intervention probes、downstream success 和 affordance baseline 的关系。",
+                    "novelty_boundary": "贡献在 diagnostic protocol 和 failure-mode characterization，不在声称全新 world model。",
+                    "stronger_baseline_to_beat": "prediction-matched WAM plus affordance-style controllability metric",
+                    "minimum_discriminating_experiment": "同 prediction error 下，比较 probe score、affordance metric 与 action success 的相关性。",
+                    "falsifiable_prediction": "probe score 会发现 affordance metric 或 prediction loss 看不到的 controllability failure。",
+                    "failure_value": "若没有额外信号，则说明已有 affordance metric 已足够，给出负结果边界。",
+                    "main_risks": ["benchmark-only contribution may be considered narrow"],
+                    "evidence_needed": ["latest affordance and controllability benchmarks"],
+                    "maturity": "promising",
+                }
+            ],
+            "discarded": [],
+        }
+    elif "ResearchChairDecision" in prompt or "research_chair" in prompt:
+        data = {
+            "summary": "最值得继续的是把 idea 收窄成 prediction-control gap 的 benchmark/diagnostic 贡献；当前不应包装成大 architecture 创新。",
+            "final_ideas": [
+                {
+                    "rank": 1,
+                    "idea_id": "RR1",
+                    "name": "Prediction-control gap benchmark for WAMs",
+                    "decision": "needs_evidence",
+                    "why_selected": "它有明确 central insight、可区分实验和可修复的 prior-work 风险。",
+                    "central_insight": "prediction accuracy 与 controllable action effects 的脱钩是可测量且有用的 failure mode。",
+                    "novelty_boundary": "diagnostic protocol and failure characterization, not a generic WAM architecture.",
+                    "stronger_baseline_to_beat": "prediction-matched WAM plus affordance-style controllability metric",
+                    "minimum_discriminating_experiment": "比较 prediction error、probe score、affordance metric 与 downstream success 的相关性。",
+                    "failure_conditions": ["affordance metrics already capture the same gap", "probe score does not predict action success"],
+                    "next_literature_checks": ["affordance evaluation benchmarks", "controllable representation learning"],
+                    "next_experiment_checks": ["toy contact-rich task with prediction-matched models", "probe-vs-success correlation"],
+                }
+            ],
+            "promising_pivots": ["If novelty is covered, pivot to a negative-result benchmark on WAM controllability limits."],
+            "rejected": [],
+            "global_risks": ["The work must avoid becoming just another benchmark without a central failure-mode insight."],
+        }
     else:
         data = {
             "objective": "Validate a controllability-aware world action model.",
